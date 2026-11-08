@@ -5,7 +5,7 @@ import json, os, sys, base64, subprocess, datetime as dt
 import numpy as np, pandas as pd
 
 W = os.environ.get("PB_WORK", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".work"))
-OUT = sys.argv[1] if len(sys.argv) > 1 else "docs"
+OUT = sys.argv[1] if len(sys.argv) > 1 else "."
 NBA_REPO, NFLD_REPO, RAW = f"{W}/sportsdataverse/hoopr-nba-data", f"{W}/nflverse/nfldata", f"{W}/data/raw"
 ET = "America/New_York"
 TODAY = pd.Timestamp.now(tz=ET).date()
@@ -16,6 +16,55 @@ NFL_YEARS = list(range(NFL_SEASON - 4, NFL_SEASON + 1))
 NFL_ALIAS = {"LA": "LAR", "WSH": "WAS", "JAC": "JAX", "OAK": "LV", "SD": "LAC", "STL": "LAR"}
 
 def sh(cmd): subprocess.run(cmd, shell=True, check=True)
+
+def espn_json(path):
+    import urllib.request
+    try:
+        req = urllib.request.Request("https://site.api.espn.com/apis/site/v2/sports/" + path, headers={"User-Agent": "Mozilla/5.0 (PlayHaus data refresh)"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read().decode())
+    except Exception as e:
+        print("ESPN skipped:", path.split("?")[0], type(e).__name__)
+        return None
+
+def _ml(x):
+    try:
+        if isinstance(x, dict):
+            for k in ("close", "current", "open"):
+                if k in x and isinstance(x[k], dict) and x[k].get("odds") not in (None, ""):
+                    return _ml(x[k]["odds"])
+            return None
+        if x in (None, "", "EVEN", "even"): return 100 if x in ("EVEN", "even") else None
+        return int(float(str(x).replace("+", "")))
+    except Exception:
+        return None
+
+def espn_lines(sport_path, days):
+    """{(date, home, away): {total, spread(home), ml_home, ml_away}} from ESPN scoreboards."""
+    import re
+    out = {}
+    for d in days:
+        js = espn_json(f"{sport_path}/scoreboard?dates={d.strftime('%Y%m%d')}")
+        if not js: break
+        for ev in js.get("events", []):
+            try:
+                comp = ev["competitions"][0]
+                side = {c["homeAway"]: c["team"]["abbreviation"] for c in comp["competitors"]}
+                local = pd.Timestamp(ev["date"]).tz_convert(ET)
+                odds = (comp.get("odds") or [{}])[0]
+                total = odds.get("overUnder"); spread = None
+                det = str(odds.get("details") or "")
+                m = re.match(r"([A-Z]{2,4})\s+([-+]?\d+(?:\.\d+)?)", det)
+                if m: spread = float(m.group(2)) if m.group(1) == side["home"] else -float(m.group(2))
+                elif det.upper().startswith("EVEN"): spread = 0.0
+                elif odds.get("spread") is not None: spread = float(odds["spread"])
+                mlh = _ml((odds.get("homeTeamOdds") or {}).get("moneyLine")); mla = _ml((odds.get("awayTeamOdds") or {}).get("moneyLine"))
+                if mlh is None and isinstance(odds.get("moneyline"), dict):
+                    mlh = _ml(odds["moneyline"].get("home")); mla = _ml(odds["moneyline"].get("away"))
+                out[(str(local.date()), side["home"], side["away"])] = {"total": None if total is None else float(total), "spread": spread, "ml_home": mlh, "ml_away": mla}
+            except Exception:
+                continue
+    return out
 
 def fetch():
     os.makedirs(RAW, exist_ok=True)
@@ -80,15 +129,35 @@ def nba():
     sc = pd.read_parquet(f"{NBA_REPO}/nba/schedules/parquet/nba_schedule_{NBA_SEASON}.parquet")
     sc["local"] = pd.to_datetime(sc.date, utc=True).dt.tz_convert(ET)
     up = sc[(sc.local.dt.date >= TODAY) & (sc.local.dt.date <= TODAY + dt.timedelta(days=4))]
-    games = [{"day": (r.local.date() - base).days, "date": str(r.local.date()), "time": r.local.strftime("%-I:%M %p"),
-              "home": r.home_abbreviation, "away": r.away_abbreviation, "total": None, "spread": None}
-             for r in up.itertuples() if r.home_abbreviation in tix and r.away_abbreviation in tix]
+    lines = espn_lines("basketball/nba", [TODAY + dt.timedelta(days=k) for k in range(5)])
+    games = []
+    for r in up.itertuples():
+        if r.home_abbreviation not in tix or r.away_abbreviation not in tix: continue
+        ln = lines.get((str(r.local.date()), r.home_abbreviation, r.away_abbreviation), {})
+        games.append({"day": (r.local.date() - base).days, "date": str(r.local.date()), "time": r.local.strftime("%-I:%M %p"),
+                      "home": r.home_abbreviation, "away": r.away_abbreviation, "total": ln.get("total"), "spread": ln.get("spread"),
+                      "ml_home": ln.get("ml_home"), "ml_away": ln.get("ml_away")})
+    print("NBA games with lines:", sum(1 for g_ in games if g_["total"] is not None), "of", len(games))
     # auto injury signal: rotation players who missed their team's most recent games
     inj = []
+    ij = espn_json("basketball/nba/injuries")
+    if ij and ij.get("injuries"):
+        name2ab = {}
+        for ab, info in tinfo.items():
+            for nm in info: name2ab[str(nm).lower()] = ab
+        for team in ij["injuries"]:
+            ab = name2ab.get(str(team.get("displayName", "")).lower())
+            for it in team.get("injuries", []):
+                ath = it.get("athlete") or {}; st = str(it.get("status") or "").lower()
+                status = "out" if "out" in st else "doubtful" if "doubt" in st else "questionable" if st else ""
+                if not status or not ath.get("displayName"): continue
+                ab2 = ((ath.get("team") or {}).get("abbreviation")) or ab or ""
+                inj.append({"name": ath["displayName"], "team": ab2, "status": status, "why": "ESPN: " + (it.get("shortComment") or it.get("status") or "")[:90], "auto": True})
+        print("NBA injuries from ESPN:", len(inj))
     cur = d[d.season == NBA_SEASON].copy(); cur["dn"] = pd.to_datetime(cur.game_date)
     rot = played[played.season == NBA_SEASON].groupby("athlete_id").agg(mins=("minutes", "mean"), gp=("minutes", "size"))
     rot = rot[(rot.mins >= 20) & (rot.gp >= 3)]
-    for team, tg in cur.groupby("team_abbreviation"):
+    for team, tg in ([] if inj else cur.groupby("team_abbreviation")):
         last_games = sorted(tg.game_id.unique(), key=lambda x: tg[tg.game_id == x].dn.iloc[0])[-2:]
         for pid in rot.index:
             prow = played[(played.athlete_id == pid) & (played.season == NBA_SEASON)]
@@ -103,7 +172,9 @@ def nba():
                             "why": f"missed last {len(missed)} game{'s' if len(missed) > 1 else ''}" + (f" ({reason.title()})" if reason and "COACH" not in reason else ""),
                             "auto": True})
     return ({"players": players, "teams": teams, "teamInfo": tinfo, "cols": cols, "dateBase": "2022-01-01",
-             "through": str(played.date.max()), "leagueTotal": round(league_total, 1), "teamStats": tstats, "n": len(played)},
+             "through": str(played.date.max()), "leagueTotal": round(league_total, 1), "teamStats": tstats,
+             "teamColor": {r.team_abbreviation: "#" + str(r.team_color) for r in played.drop_duplicates("team_abbreviation").itertuples() if isinstance(r.team_color, str)},
+             "n": len(played)},
             {"games": games, "injuries": inj})
 
 def nfl():
@@ -146,9 +217,14 @@ def nfl():
     tstats = {t: {"g": int(len(x)), "pf": round(float(x.pf.mean()), 1), "pa": round(float(x.pa.mean()), 1)} for t, x in rows_.groupby("t")}
     gm["gd"] = pd.to_datetime(gm.gameday).dt.date
     up = gm[(gm.gd >= TODAY) & (gm.gd <= TODAY + dt.timedelta(days=8)) & (gm.season == NFL_SEASON)]
-    games = [{"key": int(r.season) * 100 + int(r.week), "date": str(r.gd), "home": r.home_team, "away": r.away_team,
+    def t12(x):
+        try: h, m = str(x).split(":")[:2]; h = int(h); return f"{(h - 1) % 12 + 1}:{m} {'PM' if h >= 12 else 'AM'}"
+        except Exception: return ""
+    nint = lambda v: None if pd.isna(v) else int(v)
+    games = [{"key": int(r.season) * 100 + int(r.week), "date": str(r.gd), "time": t12(r.gametime), "home": r.home_team, "away": r.away_team,
               "total": None if pd.isna(r.total_line) else float(r.total_line),
-              "spread": None if pd.isna(r.spread_line) else -float(r.spread_line)} for r in up.itertuples()]
+              "spread": None if pd.isna(r.spread_line) else -float(r.spread_line),
+              "ml_home": nint(r.home_moneyline), "ml_away": nint(r.away_moneyline)} for r in up.sort_values(["gd", "gametime"]).itertuples()]
     inj = []
     fi = f"{RAW}/nfl_inj_{NFL_SEASON}.csv"
     if os.path.exists(fi) and os.path.getsize(fi) > 100 and games:
