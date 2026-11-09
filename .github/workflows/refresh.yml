@@ -1,3 +1,4 @@
+
 name: Daily stats refresh + deploy
 
 on:
@@ -8,7 +9,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -30,6 +31,12 @@ jobs:
           PB_WORK: ${{ runner.temp }}/work
         run: python build_data.py .
       - run: test $(stat -c%s data.json) -gt 2000000
+      - name: Upload data files to the "data" release (read by the Claude refresh task)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view data >/dev/null 2>&1 || gh release create data --title "Latest data" --notes "Rebuilt every morning by the refresh workflow."
+          gh release upload data data.json slate.json --clobber
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
