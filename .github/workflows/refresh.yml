@@ -36,7 +36,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view data >/dev/null 2>&1 || gh release create data --title "Latest data" --notes "Rebuilt every morning by the refresh workflow."
-          gh release upload data data.json slate.json --clobber
+          gh release upload data data.json slate.json data_cbb.json data_wnba.json --clobber
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
