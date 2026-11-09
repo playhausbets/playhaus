@@ -39,12 +39,12 @@ def _ml(x):
     except Exception:
         return None
 
-def espn_lines(sport_path, days):
+def espn_lines(sport_path, days, extra=""):
     """{(date, home, away): {total, spread(home), ml_home, ml_away}} from ESPN scoreboards."""
     import re
     out = {}
     for d in days:
-        js = espn_json(f"{sport_path}/scoreboard?dates={d.strftime('%Y%m%d')}")
+        js = espn_json(f"{sport_path}/scoreboard?dates={d.strftime('%Y%m%d')}{extra}")
         if not js: break
         for ev in js.get("events", []):
             try:
@@ -66,12 +66,26 @@ def espn_lines(sport_path, days):
                 continue
     return out
 
+BB = {  # basketball leagues share one pipeline (all ESPN box scores via sportsdataverse)
+    "NBA":  {"repo": "hoopr-nba-data",  "pfx": "nba",  "season": NBA_SEASON, "years": NBA_YEARS,
+             "espn": "basketball/nba", "extra": "", "min_rows": 500, "min_avg": 0, "inj": "basketball/nba/injuries", "heur": True},
+    "CBB":  {"repo": "hoopR-mbb-data",  "pfx": "mbb",  "season": NBA_SEASON, "years": [NBA_SEASON - 1, NBA_SEASON],
+             "espn": "basketball/mens-college-basketball", "extra": "&groups=50&limit=500", "min_rows": 150, "min_avg": 12, "inj": None, "heur": False},
+    "WNBA": {"repo": "wehoop-wnba-data", "pfx": "wnba", "season": TODAY.year if TODAY.month >= 5 else TODAY.year - 1, "years": None,
+             "espn": "basketball/wnba", "extra": "", "min_rows": 200, "min_avg": 0, "inj": "basketball/wnba/injuries", "heur": True},
+}
+BB["WNBA"]["years"] = list(range(BB["WNBA"]["season"] - 4, BB["WNBA"]["season"] + 1))
+def bb_dir(k): return f"{W}/sportsdataverse/{BB[k]['repo']}"
+
 def fetch():
     os.makedirs(RAW, exist_ok=True)
-    if not os.path.isdir(NBA_REPO + "/.git"):
-        sh(f"GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/sportsdataverse/hoopr-nba-data {NBA_REPO}")
-    pats = " ".join([f"/nba/player_box/parquet/player_box_{y}.parquet" for y in NBA_YEARS] + [f"/nba/schedules/parquet/nba_schedule_{NBA_SEASON}.parquet"])
-    sh(f"cd {NBA_REPO} && git fetch -q --depth 1 origin main && git sparse-checkout set --no-cone {pats} && git checkout -q -B main origin/main")
+    for k, c in BB.items():
+        repo = bb_dir(k)
+        if not os.path.isdir(repo + "/.git"):
+            sh(f"GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/sportsdataverse/{c['repo']} {repo}")
+        pats = " ".join([f"/{c['pfx']}/player_box/parquet/player_box_{y}.parquet" for y in c["years"]] +
+                        [f"/{c['pfx']}/schedules/parquet/{c['pfx']}_schedule_{y}.parquet" for y in (c["season"], c["season"] + 1)])
+        sh(f"cd {repo} && git fetch -q --depth 1 origin main && git sparse-checkout set --no-cone {pats} && git checkout -q -B main origin/main")
     if not os.path.isdir(NFLD_REPO + "/.git"):
         sh(f"GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/nflverse/nfldata {NFLD_REPO}")
     sh(f"cd {NFLD_REPO} && git fetch -q --depth 1 origin master && git sparse-checkout set --no-cone /data/games.csv && git checkout -q -B master origin/master")
@@ -83,10 +97,13 @@ def fetch():
         sh(f"curl -sSLf --max-time 180 -o {f} {url}")
     sh(f"curl -sSLf --max-time 120 -o {RAW}/nfl_inj_{NFL_SEASON}.csv {rel}/injuries/injuries_{NFL_SEASON}.csv || true")
 
-def nba():
-    d = pd.concat([pd.read_parquet(f"{NBA_REPO}/nba/player_box/parquet/player_box_{y}.parquet") for y in NBA_YEARS], ignore_index=True)
+def bball(key):
+    c = BB[key]; repo = bb_dir(key); SEASON = c["season"]
+    files = [f"{repo}/{c['pfx']}/player_box/parquet/player_box_{y}.parquet" for y in c["years"]]
+    files = [f for f in files if os.path.exists(f)]
+    d = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
     d = d[d.season_type.isin([2, 3])]
-    vc = d.team_abbreviation.value_counts(); real = set(vc[vc > 500].index)
+    vc = d.team_abbreviation.value_counts(); real = set(vc[vc > c["min_rows"]].index)
     d = d[d.team_abbreviation.isin(real) & d.opponent_team_abbreviation.isin(real)].copy()
     played = d[(~d.did_not_play.fillna(False)) & (d.minutes.fillna(0) > 0)].dropna(subset=["points"]).copy()
     played["date"] = pd.to_datetime(played.game_date).dt.strftime("%Y%m%d").astype(int)
@@ -97,23 +114,27 @@ def nba():
     num_ = played.field_goals_attempted.fillna(0) + 0.44 * played.free_throws_attempted.fillna(0) + played.turnovers.fillna(0)
     den_ = played.minutes * (played.tfga + 0.44 * played.tfta + played.ttov)
     played["usg"] = (100 * num_ * (played.tmin / 5) / den_).clip(0, 99).fillna(0)
-    # team pace / scoring (this season, fallback last season)
     tgm = tm.reset_index().merge(played[["game_id", "season"]].drop_duplicates(), on="game_id")
     tgm["poss"] = tgm.tfga + 0.44 * tgm.tfta - tgm.toreb + tgm.ttov
     opp = tgm[["game_id", "team_abbreviation", "tpts", "poss"]].rename(columns={"team_abbreviation": "opp", "tpts": "opts", "poss": "oposs"})
     tgm = tgm.merge(opp, on="game_id"); tgm = tgm[tgm.team_abbreviation != tgm.opp]
     tstats = {}
     for t, g_ in tgm.groupby("team_abbreviation"):
-        cur_ = g_[g_.season == NBA_SEASON]; g2 = cur_ if len(cur_) >= 3 else g_[g_.season == NBA_SEASON - 1]
+        cur_ = g_[g_.season == SEASON]; g2 = cur_ if len(cur_) >= 3 else g_[g_.season == SEASON - 1]
         if len(g2): tstats[t] = {"g": int(len(cur_)), "pace": round(float(((g2.poss + g2.oposs) / 2).mean()), 1), "pf": round(float(g2.tpts.mean()), 1), "pa": round(float(g2.opts.mean()), 1)}
-    active = set(played[played.season >= NBA_SEASON - 1].athlete_id)   # only players active this season or last
-    played = played[played.athlete_id.isin(active)]
+    recent = played[played.season >= SEASON - 1]
+    if c["min_avg"]:
+        avgmin = recent.groupby(["athlete_id", "season"]).minutes.agg(["mean", "size"])
+        keep = set(i[0] for i, r in avgmin.iterrows() if r["mean"] >= c["min_avg"] and r["size"] >= 3)
+    else:
+        keep = set(recent.athlete_id)
+    played = played[played.athlete_id.isin(keep)]       # only players active this season or last
     teams = sorted(real); tix = {t: i for i, t in enumerate(teams)}
     tinfo = {r.team_abbreviation: [r.team_name, r.team_location, r.team_display_name]
-             for r in played.drop_duplicates("team_abbreviation").itertuples()}
+             for r in d.drop_duplicates("team_abbreviation").itertuples()}
     pl = played.groupby("athlete_id").tail(1); pix = {p: i for i, p in enumerate(pl.athlete_id)}
     players = [[r.athlete_display_name, r.athlete_position_abbreviation or ""] for r in pl.itertuples()]
-    num = lambda c: [int(round(x)) for x in played[c].fillna(0)]
+    num = lambda col: [int(round(x)) for x in played[col].fillna(0)]
     base = dt.date(2022, 1, 1)
     days = lambda s: [(dt.date(x // 10000, x // 100 % 100, x % 100) - base).days for x in s]
     cols = {"p": [pix[x] for x in played.athlete_id], "d": days(played.date), "s": played.season.astype(int).tolist(),
@@ -123,24 +144,26 @@ def nba():
             "blk": num("blocks"), "tov": num("turnovers"), "fgm": num("field_goals_made"), "fga": num("field_goals_attempted"),
             "fg3m": num("three_point_field_goals_made"), "fg3a": num("three_point_field_goals_attempted"), "ftm": num("free_throws_made"), "fta": num("free_throws_attempted"), "usg": num("usg"),
             "oreb": num("offensive_rebounds"), "dreb": num("defensive_rebounds")}
-    g = played[played.season >= NBA_SEASON - 1].drop_duplicates("game_id")
-    league_total = float((g.team_score + g.opponent_team_score).mean())
-    # schedule (upcoming 4 days)
-    sc = pd.read_parquet(f"{NBA_REPO}/nba/schedules/parquet/nba_schedule_{NBA_SEASON}.parquet")
-    sc["local"] = pd.to_datetime(sc.date, utc=True).dt.tz_convert(ET)
-    up = sc[(sc.local.dt.date >= TODAY) & (sc.local.dt.date <= TODAY + dt.timedelta(days=4))]
-    lines = espn_lines("basketball/nba", [TODAY + dt.timedelta(days=k) for k in range(5)])
+    g = played[played.season >= SEASON - 1].drop_duplicates("game_id")
+    league_total = float((g.team_score + g.opponent_team_score).mean()) if len(g) else None
     games = []
-    for r in up.itertuples():
-        if r.home_abbreviation not in tix or r.away_abbreviation not in tix: continue
-        ln = lines.get((str(r.local.date()), r.home_abbreviation, r.away_abbreviation), {})
-        games.append({"day": (r.local.date() - base).days, "date": str(r.local.date()), "time": r.local.strftime("%-I:%M %p"),
-                      "home": r.home_abbreviation, "away": r.away_abbreviation, "total": ln.get("total"), "spread": ln.get("spread"),
-                      "ml_home": ln.get("ml_home"), "ml_away": ln.get("ml_away")})
-    print("NBA games with lines:", sum(1 for g_ in games if g_["total"] is not None), "of", len(games))
-    # auto injury signal: rotation players who missed their team's most recent games
+    for y in (SEASON, SEASON + 1):
+        f = f"{repo}/{c['pfx']}/schedules/parquet/{c['pfx']}_schedule_{y}.parquet"
+        if not os.path.exists(f): continue
+        sc = pd.read_parquet(f, columns=["date", "home_abbreviation", "away_abbreviation"])
+        sc["local"] = pd.to_datetime(sc.date, utc=True).dt.tz_convert(ET)
+        up = sc[(sc.local.dt.date >= TODAY) & (sc.local.dt.date <= TODAY + dt.timedelta(days=4))]
+        if not len(up): continue
+        lines = espn_lines(c["espn"], [TODAY + dt.timedelta(days=k) for k in range(5)], c["extra"])
+        for r in up.itertuples():
+            if r.home_abbreviation not in tix or r.away_abbreviation not in tix: continue
+            ln = lines.get((str(r.local.date()), r.home_abbreviation, r.away_abbreviation), {})
+            games.append({"day": (r.local.date() - base).days, "date": str(r.local.date()), "time": r.local.strftime("%-I:%M %p"),
+                          "home": r.home_abbreviation, "away": r.away_abbreviation, "total": ln.get("total"), "spread": ln.get("spread"),
+                          "ml_home": ln.get("ml_home"), "ml_away": ln.get("ml_away")})
+    print(key, "games:", len(games), "with lines:", sum(1 for g_ in games if g_["total"] is not None))
     inj = []
-    ij = espn_json("basketball/nba/injuries")
+    ij = espn_json(c["inj"]) if c["inj"] else None
     if ij and ij.get("injuries"):
         name2ab = {}
         for ab, info in tinfo.items():
@@ -153,28 +176,31 @@ def nba():
                 if not status or not ath.get("displayName"): continue
                 ab2 = ((ath.get("team") or {}).get("abbreviation")) or ab or ""
                 inj.append({"name": ath["displayName"], "team": ab2, "status": status, "why": "ESPN: " + (it.get("shortComment") or it.get("status") or "")[:90], "auto": True})
-        print("NBA injuries from ESPN:", len(inj))
-    cur = d[d.season == NBA_SEASON].copy(); cur["dn"] = pd.to_datetime(cur.game_date)
-    rot = played[played.season == NBA_SEASON].groupby("athlete_id").agg(mins=("minutes", "mean"), gp=("minutes", "size"))
-    rot = rot[(rot.mins >= 20) & (rot.gp >= 3)]
-    for team, tg in ([] if inj else cur.groupby("team_abbreviation")):
-        last_games = sorted(tg.game_id.unique(), key=lambda x: tg[tg.game_id == x].dn.iloc[0])[-2:]
-        for pid in rot.index:
-            prow = played[(played.athlete_id == pid) & (played.season == NBA_SEASON)]
-            if prow.empty or prow.team_abbreviation.iloc[-1] != team: continue
-            missed = [gid for gid in last_games if not ((prow.game_id == gid).any())]
-            if not missed: continue
-            why = tg[(tg.athlete_id == pid) & (tg.game_id == last_games[-1])].reason
-            reason = (why.iloc[0] if len(why) else "") or ""
-            if len(missed) == 2 or (last_games[-1] in missed and reason and "COACH" not in reason):
-                inj.append({"name": prow.athlete_display_name.iloc[-1], "team": team,
-                            "status": "out" if len(missed) == 2 else "questionable",
-                            "why": f"missed last {len(missed)} game{'s' if len(missed) > 1 else ''}" + (f" ({reason.title()})" if reason and "COACH" not in reason else ""),
-                            "auto": True})
+        print(key, "injuries from ESPN:", len(inj))
+    if not inj and c["heur"] and games:
+        cur = d[d.season == SEASON].copy(); cur["dn"] = pd.to_datetime(cur.game_date)
+        pc = played[played.season == SEASON]
+        rot = pc.groupby("athlete_id").agg(mins=("minutes", "mean"), gp=("minutes", "size"))
+        rot = rot[(rot.mins >= 20) & (rot.gp >= 3)]
+        last_team = pc.groupby("athlete_id").team_abbreviation.last()
+        pgames = pc.groupby("athlete_id").game_id.apply(set)
+        pname = pc.groupby("athlete_id").athlete_display_name.last()
+        for team, tg in cur.groupby("team_abbreviation"):
+            order = tg.drop_duplicates("game_id").sort_values("dn").game_id.tolist()[-2:]
+            for pid in rot.index:
+                if last_team.get(pid) != team: continue
+                missed = [gid for gid in order if gid not in pgames[pid]]
+                if not missed: continue
+                why = tg[(tg.athlete_id == pid) & (tg.game_id == order[-1])].reason
+                reason = (why.iloc[0] if len(why) else "") or ""
+                if len(missed) == 2 or (order[-1] in missed and reason and "COACH" not in reason):
+                    inj.append({"name": pname[pid], "team": team, "status": "out" if len(missed) == 2 else "questionable",
+                                "why": f"missed last {len(missed)} game{'s' if len(missed) > 1 else ''}" + (f" ({reason.title()})" if reason and "COACH" not in reason else ""),
+                                "auto": True})
     return ({"players": players, "teams": teams, "teamInfo": tinfo, "cols": cols, "dateBase": "2022-01-01",
-             "through": str(played.date.max()), "leagueTotal": round(league_total, 1), "teamStats": tstats,
-             "teamColor": {r.team_abbreviation: "#" + str(r.team_color) for r in played.drop_duplicates("team_abbreviation").itertuples() if isinstance(r.team_color, str)},
-             "n": len(played)},
+             "through": str(played.date.max()), "leagueTotal": round(league_total, 1) if league_total else None, "teamStats": tstats,
+             "teamColor": {r.team_abbreviation: "#" + str(r.team_color) for r in d.drop_duplicates("team_abbreviation").itertuples() if isinstance(r.team_color, str)},
+             "season": SEASON, "n": len(played)},
             {"games": games, "injuries": inj})
 
 def nfl():
@@ -252,12 +278,21 @@ def pack(block, nba_dates=False):
 
 if __name__ == "__main__":
     if "--no-fetch" not in sys.argv: fetch()
-    nb, nbs = nba(); nf, nfs = nfl()
+    nb, nbs = bball("NBA"); nf, nfs = nfl()
+    extra = {}
+    for k in ("CBB", "WNBA"):
+        try: extra[k] = bball(k)
+        except Exception as e: print(k, "skipped:", type(e).__name__, e)
     pack(nb); pack(nf)
     os.makedirs(OUT, exist_ok=True)
     stamp = pd.Timestamp.now(tz=ET).strftime("%Y-%m-%d %H:%M")
     json.dump({"built": stamp, "NBA": nb, "NFL": nf}, open(f"{OUT}/data.json", "w"), separators=(",", ":"))
-    json.dump({"built": stamp, "today": str(TODAY), "NBA": nbs, "NFL": nfs}, open(f"{OUT}/slate.json", "w"), separators=(",", ":"))
+    slate = {"built": stamp, "today": str(TODAY), "NBA": nbs, "NFL": nfs}
+    for k, (blk, sl) in extra.items():
+        pack(blk); json.dump({"built": stamp, k: blk}, open(f"{OUT}/data_{k.lower()}.json", "w"), separators=(",", ":"))
+        slate[k] = sl
+        print(f"data_{k.lower()}.json", os.path.getsize(f"{OUT}/data_{k.lower()}.json") // 1024, "KB |", k, blk["n"], "rows thru", blk["through"])
+    json.dump(slate, open(f"{OUT}/slate.json", "w"), separators=(",", ":"))
     print("data.json", os.path.getsize(f"{OUT}/data.json") // 1024, "KB | NBA", nb["n"], "rows thru", nb["through"],
           "| NFL", nf["n"], "rows thru", nf["through"], "| upcoming NBA", len(nbs["games"]), "NFL", len(nfs["games"]),
           "| auto injuries NBA", len(nbs["injuries"]), "NFL", len(nfs["injuries"]))
