@@ -2,19 +2,27 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#7B1E2B">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Play Haus">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="manifest" href="manifest.json">
 <title>Play Haus</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{--bg:#E9D8C7;--card:#F6ECE2;--card2:#EFE2D4;--line:#D9C4AF;--txt:#2B1D16;--mut:#7D6757;--acc:#7B1E2B;--more:#1F7A4C;--less:#B42318;--warn:#B45309}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding-bottom:84px}
-header{padding:16px 16px 4px;max-width:640px;margin:0 auto}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+header{padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 4px calc(16px + env(safe-area-inset-left));max-width:640px;margin:0 auto}
 h1{font-size:20px;margin:0}
 .sub{color:var(--mut);font-size:12px}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#F2E6D9;border-top:1px solid var(--line);z-index:5;overflow-x:auto;scrollbar-width:none}
 nav::-webkit-scrollbar{display:none}
-nav button{flex:1 0 auto;background:none;border:0;color:var(--mut);padding:12px 9px 18px;font-size:12.5px;font-weight:600;white-space:nowrap}
+nav button{flex:1 0 auto;background:none;border:0;color:var(--mut);padding:12px 9px calc(14px + env(safe-area-inset-bottom));font-size:12.5px;font-weight:600;white-space:nowrap}
 nav button.on{color:var(--txt);box-shadow:inset 0 2px 0 var(--acc)}
 main{padding:4px 12px;max-width:640px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
@@ -57,6 +65,28 @@ td.r,th.r{text-align:right}
 tr.best td{background:#EFD9D2}
 .note{font-size:12px;color:var(--mut);margin-top:8px}
 .hide{display:none!important}
+.ggrid{display:grid;gap:12px;margin-top:10px}.ggrid>.card{margin:0}
+@media (min-width:900px){
+  header,main{max-width:1240px}
+  header{padding-left:24px;padding-right:24px}main{padding:4px 24px}
+  .bannerwrap{max-width:900px!important}.bannerwrap img{height:340px;object-fit:cover;object-position:center 40%}
+  #lookOut svg{max-width:560px;display:block;margin:6px auto 0}
+  .ggrid{grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:16px}
+  #slateOut,#pieceOut,#v-set{column-count:2;column-gap:16px}
+  #slateOut>.card,#pieceOut>.card,#v-set>.card{break-inside:avoid;display:inline-block;width:100%;box-sizing:border-box;margin:0 0 16px}
+  #v-track:not(.hide){display:grid;grid-template-columns:1fr 1fr;gap:0 16px;align-items:start}
+  #v-track>.card{grid-column:1}#v-track>#entryList{grid-column:2;grid-row:1/span 3}
+  #v-today>.card:first-child{max-width:760px}
+  .split:not(.hide){display:grid;grid-template-columns:400px 1fr;gap:20px;align-items:start}
+  .split>.card{position:sticky;top:12px;margin-top:10px}
+  #boardOut>.seg{max-width:620px}
+  #gamesOut>.seg{max-width:620px}
+  nav{justify-content:center}nav button{flex:0 0 auto;padding-left:22px;padding-right:22px;font-size:14px}
+  .card{padding:18px}
+}
+@media (min-width:1400px){#slateOut,#v-set{column-count:3}}
+.sc{font-size:22px;font-weight:800;min-width:36px;text-align:center;color:var(--mut);font-variant-numeric:tabular-nums}.sc.win{color:var(--txt)}
+.live{color:#B42318;animation:blink 1.4s infinite}@keyframes blink{50%{opacity:.35}}
 .avatar{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-weight:800;flex:0 0 auto;letter-spacing:.02em;box-shadow:0 0 0 2px #F6ECE2,0 0 0 3px var(--line)}
 .star{background:none;border:0;font-size:20px;line-height:1;color:var(--mut);padding:4px 2px 4px 6px;cursor:pointer}
 .star.on{color:#C9971A}
@@ -90,7 +120,7 @@ summary{cursor:pointer;padding:4px 0}
   <h1>💸 Play Haus <span class="tag" id="saveTag">local</span></h1>
   <div class="sub" id="dataSub">NBA &amp; NFL lineup builder</div>
 </header>
-<div style="max-width:640px;margin:8px auto 0;padding:0 12px"><img src="banner.jpg?v=3" alt="Risk / Rich — everything you need in one place." style="display:block;width:100%"></div>
+<div class="bannerwrap" style="max-width:640px;margin:8px auto 0;padding:0 12px"><img src="banner.jpg?v=3" alt="Risk / Rich — everything you need in one place." style="display:block;width:100%"></div>
 <main>
 
 <!-- ============ TODAY ============ -->
@@ -129,7 +159,7 @@ summary{cursor:pointer;padding:4px 0}
 <section id="v-board" class="hide"><div id="boardOut" style="margin-top:10px"></div></section>
 
 <!-- ============ LOOKUP ============ -->
-<section id="v-look" class="hide">
+<section id="v-look" class="hide split">
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center"><b>🔐 Player Vault</b><span><button class="btn sm ghost" id="l-star">☆ Star</button> <button class="btn sm ghost" id="l-watch">👀 Watch</button></span></div>
     <label>Player</label>
@@ -171,6 +201,11 @@ summary{cursor:pointer;padding:4px 0}
 
 <!-- ============ SETTINGS ============ -->
 <section id="v-set" class="hide">
+  <div class="card" style="display:flex;gap:12px;align-items:center">
+    <img src="apple-touch-icon.png" alt="" style="width:56px;height:56px;border-radius:13px;flex:0 0 auto">
+    <div><b>📲 Add Play Haus to your home screen</b>
+    <div class="note" style="margin-top:4px"><b>iPhone (Safari):</b> tap Share <span style="font-size:15px">⬆️</span> → <b>Add to Home Screen</b> → Add.<br><b>Android (Chrome):</b> tap ⋮ → <b>Add to Home screen</b> (or <b>Install app</b>).</div></div>
+  </div>
   <div class="card">
     <b>💵 Bankroll</b>
     <div class="note">Sets suggested entry sizes (quarter-Kelly, never more than 2 units) and a daily stop.</div>
@@ -925,11 +960,11 @@ let gamesSport=null,gamesDate=null,gameOpen=null;
 const fmtLine=v=>v==null?"—":(v>0?"+":"")+v;
 const fmtDay=ds=>{const [y,m,d]=ds.split("-").map(Number);const t=new Date(Date.UTC(y,m-1,d));const today=new Date(new Date().toLocaleString("en-US",{timeZone:"America/New_York"}));const td=Date.UTC(today.getFullYear(),today.getMonth(),today.getDate());const diff=Math.round((t-td)/864e5);
   return diff===0?"Today":diff===1?"Tomorrow":t.toLocaleDateString(undefined,{weekday:"short",month:"numeric",day:"numeric",timeZone:"UTC"});};
-function renderGames(){
+function renderGames(fromLive){
   const el=$("gamesOut");if(!SL){el.innerHTML=`<div class="card empty">Schedule not loaded yet.</div>`;return;}
   if(!gamesSport){const nbaToday=(SL.NBA.games||[]).length;gamesSport=nbaToday?"NBA":"NFL";}
   const sp=gamesSport,all=(SL[sp].games||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)||tmin(a.time)-tmin(b.time));
-  const dates=[...new Set(all.map(g=>g.date))];
+  const td=etToday();let dates=[...new Set(all.map(g=>g.date))].filter(d=>d>=td);if(!dates.length)dates=[...new Set(all.map(g=>g.date))];
   if(!gamesDate||!dates.includes(gamesDate))gamesDate=dates[0];
   const games=all.filter(g=>g.date===gamesDate);
   if(!BOARD&&D.NBA)buildBoard();
@@ -937,20 +972,24 @@ function renderGames(){
   let html=`<div class="seg" id="gSport"><button data-s="NBA" class="${sp==="NBA"?"on":""}">🏀 NBA</button><button data-s="NFL" class="${sp==="NFL"?"on":""}">🏈 NFL</button></div>
     <div class="chips" id="gDays">${dates.map(d=>`<button data-d="${d}" class="${d===gamesDate?"on":""}">${fmtDay(d)}</button>`).join("")}</div>`;
   if(!games.length)html+=`<div class="card empty">No ${sp} games scheduled in the next few days.</div>`;
-  html+=games.map((g,gi)=>{
+  html+=`<div class="ggrid">`+games.map((g,gi)=>{
     const hasLines=g.total!=null||g.spread!=null||g.ml_home!=null;
+    const lv=liveFor(sp,g),showScore=lv&&(lv.state==="in"||lv.state==="post");
+    const hsN=showScore?+lv.hs:0,asN=showScore?+lv.as:0;
     const row=(ab,home)=>{const spr=g.spread==null?null:(home?g.spread:-g.spread),ml=home?g.ml_home:g.ml_away,ts=(D[sp]&&D[sp].teamStats||{})[ab];
-      return `<div class="trow"><span class="ha ${home?"h":""}">${home?"HOME":"AWAY"}</span><div class="tn"><b>${esc(ab)}</b> <span class="mut">${esc(teamName(sp,ab))}</span>${ts?`<div class="mut" style="font-size:11px">${ts.pf} scored · ${ts.pa} allowed${ts.pace?` · pace ${ts.pace}`:""}</div>`:""}</div>
+      const sc=showScore?`<div class="sc ${lv.state==="post"&&(home?hsN>asN:asN>hsN)?"win":""}">${esc(home?lv.hs:lv.as)}</div>`:"";
+      return `<div class="trow"><span class="ha ${home?"h":""}">${home?"HOME":"AWAY"}</span>${sc}<div class="tn"><b>${esc(ab)}</b> <span class="mut">${esc(teamName(sp,ab))}</span>${ts?`<div class="mut" style="font-size:11px">${ts.pf} scored · ${ts.pa} allowed${ts.pace?` · pace ${ts.pace}`:""}</div>`:""}</div>
         <div class="ln"><span class="mut">Spread</span><b>${fmtLine(spr)}</b></div><div class="ln"><span class="mut">ML</span><b>${ml==null?"—":fmtLine(ml)}</b></div></div>`;};
     const inGame=props.filter(p=>p.sport===sp&&(p.team===g.home||p.team===g.away));
     const top=(BOARD&&BOARD[sp]||[]).filter(r=>r.team===g.home||r.team===g.away).sort((a,b)=>(b.stats[b.head]?.proj||0)-(a.stats[a.head]?.proj||0)).slice(0,8);
-    return `<div class="card gcard" data-g="${gi}"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:16px">🕒 ${esc(g.time||"TBD")} ET</b><span class="mut" style="font-size:12px">${hasLines?`O/U <b style="color:var(--txt)">${g.total??"—"}</b>`:"Lines not posted yet"}</span></div>
+    return `<div class="card gcard" data-g="${gi}"><div style="display:flex;justify-content:space-between;align-items:center">${lv&&lv.state==="in"?`<b style="font-size:15px"><span class="live">● LIVE</span> ${esc(lv.detail)}</b>`:lv&&lv.state==="post"?`<b style="font-size:15px">${esc(lv.detail||"Final")}</b>`:`<b style="font-size:16px">🕒 ${esc(g.time||"TBD")} ET</b>`}<span class="mut" style="font-size:12px">${hasLines?`O/U <b style="color:var(--txt)">${g.total??"—"}</b>`:"Lines not posted yet"}</span></div>
       ${row(g.away,false)}${row(g.home,true)}
       ${inGame.length?`<div class="note">📋 ${inGame.length} of your graded prop${inGame.length>1?"s":""} in this game</div>`:""}
       ${gameOpen===gi?`<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:6px">
         ${inGame.length?`<b style="font-size:13px">Your props</b>${inGame.map(p=>`<div class="pick" style="padding:6px 0"><div class="info" style="font-size:13px"><b class="${p.side==="More"?"more":"less"}">${p.side}</b> ${p.line} ${esc(p.stat)} — ${esc(p.player)}</div><span class="grade g${p.grade[0]}">${pct(p.conf)}</span>${starBtn(p.sport,p.player)}</div>`).join("")}`:""}
         <b style="font-size:13px">Top projections</b>${top.map(r=>`<div class="pick" style="padding:6px 0" data-lab="${r.sport}|${esc(r.player)}|${esc(r.head)}"><div class="info" style="font-size:13px">${esc(r.player)} <span class="mut">${esc(r.team)}${r.minS!=null&&!isNaN(r.minS)?" · "+r.minS.toFixed(0)+" min":""}</span></div><span style="font-size:13px">${esc(r.head)} <b>${r.stats[r.head]?r.stats[r.head].proj.toFixed(1):"—"}</b></span>${starBtn(r.sport,r.player)}</div>`).join("")||'<div class="note">No projections yet.</div>'}</div>`
         :`<div class="note">Tap for projections and props in this game</div>`}</div>`;}).join("");
+  html+=`</div>`;
   html+=`<div class="note">Times are Eastern. Spread and ML (moneyline) are each team's; O/U is the game total. ${sp==="NBA"?"NBA lines fill in each morning when available.":"NFL lines come from the schedule feed."}</div>`;
   el.innerHTML=html;
   el.querySelectorAll("#gSport button").forEach(b=>b.onclick=()=>{gamesSport=b.dataset.s;gamesDate=null;gameOpen=null;renderGames();});
@@ -958,7 +997,37 @@ function renderGames(){
   el.querySelectorAll("[data-g]").forEach(c=>c.onclick=e=>{if(e.target.closest("[data-lab],[data-star]"))return;gameOpen=gameOpen===+c.dataset.g?null:+c.dataset.g;renderGames();});
   el.querySelectorAll("[data-lab]").forEach(r=>r.onclick=e=>{if(e.target.closest("[data-star]"))return;e.stopPropagation();const [s2,n,st]=r.dataset.lab.split("|");openLab(n,st);});
   wireStars(el);
+  if(!fromLive)startLive();
 }
+/* live scores (works on the public website; the Claude preview blocks outside requests, so it quietly does nothing there) */
+const LIVE={NBA:{},NFL:{}},liveAt={};let liveTimer=null,liveBusy=false;
+const ESPN_FIX={NFL:{WSH:"WAS",LA:"LAR",JAC:"JAX"},NBA:{}};
+function etToday(){const t=new Date(new Date().toLocaleString("en-US",{timeZone:"America/New_York"}));return t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")+"-"+String(t.getDate()).padStart(2,"0");}
+async function fetchLive(sport,date){
+  try{
+    const path=sport==="NBA"?"basketball/nba":"football/nfl";
+    const r=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${path}/scoreboard?dates=${date.replace(/-/g,"")}`,{cache:"no-store"});
+    if(!r.ok)return false;const js=await r.json();let changed=false;
+    (js.events||[]).forEach(ev=>{const c=(ev.competitions||[])[0];if(!c)return;const fx=ESPN_FIX[sport],t={};
+      (c.competitors||[]).forEach(x=>{const ab=fx[x.team&&x.team.abbreviation]||(x.team&&x.team.abbreviation);t[x.homeAway]={ab,score:x.score};});
+      if(!t.home||!t.away)return;const st=((ev.status||c.status||{}).type)||{};
+      const v={state:st.state||"",detail:st.shortDetail||st.detail||"",hs:t.home.score,as:t.away.score};
+      const k=t.home.ab+"|"+t.away.ab;if(JSON.stringify(LIVE[sport][k])!==JSON.stringify(v)){LIVE[sport][k]=v;changed=true;}});
+    liveAt[sport+date]=Date.now();return changed;
+  }catch(e){liveAt[sport+date]=Date.now();return false;}
+}
+function liveFor(sp,g){return LIVE[sp][g.home+"|"+g.away]||null;}
+async function pollLive(){
+  if(liveBusy||$("v-games").classList.contains("hide")||!gamesSport||!gamesDate)return;
+  const today=etToday();if(gamesDate>today)return;
+  const games=((SL&&SL[gamesSport]&&SL[gamesSport].games)||[]).filter(g=>g.date===gamesDate);
+  const allDone=games.length&&games.every(g=>{const l=liveFor(gamesSport,g);return l&&l.state==="post";});
+  const age=Date.now()-(liveAt[gamesSport+gamesDate]||0);
+  if(allDone&&age<10*60e3)return;
+  liveBusy=true;const changed=await fetchLive(gamesSport,gamesDate);liveBusy=false;
+  if(changed&&!$("v-games").classList.contains("hide"))renderGames(true);
+}
+function startLive(){if(!liveTimer)liveTimer=setInterval(pollLive,30000);setTimeout(pollLive,50);}
 function tmin(t){if(!t)return 9999;const m=String(t).match(/(\d+):(\d+)\s*(AM|PM)/i);if(!m)return 9999;let h=+m[1]%12;if(/pm/i.test(m[3]))h+=12;return h*60+ +m[2];}
 
 /* =================== PIECE IT TOGETHER =================== */
@@ -1216,7 +1285,7 @@ function renderBoard(){
   }else if(boardSeg==="match"){
     const ts=S.teamStats||{},rank=(k,ab,desc)=>{const v=Object.entries(ts).filter(([,x])=>x[k]!=null).sort((a,b)=>desc?b[1][k]-a[1][k]:a[1][k]-b[1][k]);return v.findIndex(([t])=>t===ab)+1;};
     const N=Object.keys(ts).length;
-    html+=games.map((g,gi)=>{
+    html+=`<div class="ggrid">`+games.map((g,gi)=>{
       const lines=[];
       const soft=(defAb,offAb)=>{const d=S.teams.indexOf(defAb);if(d<0)return "";const items=[];
         const cfg=sp==="NBA"?[["Points","G"],["Points","F"],["Points","C"],["Rebounds","C"],["Assists","G"],["3-PT Made","G"]]:[["Pass Yards","QB"],["Rush Yards","RB"],["Receiving Yards","WR"],["Receiving Yards","TE"]];
@@ -1230,6 +1299,7 @@ function renderBoard(){
         <div style="font-size:13px;margin-top:6px">${tline(g.away)}<br>${tline(g.home)}</div>
         ${soft(g.home,g.away)}${soft(g.away,g.home)}
         ${mgOpen===gi?`<table style="margin-top:8px">${top.map(r=>`<tr data-lab="${r.sport}|${esc(r.player)}|${esc(r.head)}"><td>${esc(r.player)} <span class="mut" style="font-size:11px">${esc(r.team)}</span></td><td class="r">${esc(r.head)} <b>${r.stats[r.head]?r.stats[r.head].proj.toFixed(1):"—"}</b></td></tr>`).join("")}</table>`:`<div class="note">Tap for top projections in this game</div>`}</div>`;}).join("");
+    html+=`</div>`;
     html+=`<div class="note">Soft spots compare what each defense allows to that position vs the league (this season + last). ${sp==="NBA"?"Pace = possessions per game.":"Totals and spreads are from the schedule's betting lines."}</div>`;
   }else{
     const w=(state.watch||[]).filter(x=>x.sport===sp);
@@ -1413,7 +1483,7 @@ function renderTracker(){
     ${e.picks.map((p,i)=>`<div class="pick"><div class="info"><div class="nm" style="font-size:14px">${esc(p.player)}</div><div class="mut" style="font-size:12px"><span class="${p.side==="More"?"more":"less"}">${p.side}</span> ${p.line} ${esc(p.stat)}${p.actual!=null?" · got "+esc(p.actual):""}</div></div>
     <div class="hm">${["hit","miss","push"].map(x=>`<button class="${p.result===x?x:""}" data-e="${e.id}" data-i="${i}" data-r="${x}">${x==="hit"?"✓":x==="miss"?"✗":"P"}</button>`).join("")}</div></div>`).join("")}
     <div class="row" style="margin-top:10px;align-items:end"><div><label style="margin-top:0">Amount returned (auto)</label><input type="number" inputmode="decimal" data-ret="${e.id}" value="${e.returned??""}" placeholder="${r!=null?r.toFixed(2):"$"}"></div>
-    <button class="btn sm ghost" style="flex:0 0 auto" data-del="${e.id}">Delete</button></div></div>`;}).join(""):`<div class="card empty">No entries yet. Build one on the Today tab.</div>`;
+    <button class="btn sm ghost" style="flex:0 0 auto" data-del="${e.id}">Delete</button></div></div>`;}).join(""):`<div class="card empty">No entries yet. Build one on the Picks tab.</div>`;
   $("entryList").querySelectorAll("[data-r]").forEach(b=>b.onclick=()=>{const e=state.entries.find(x=>x.id===b.dataset.e),p=e.picks[+b.dataset.i];p.result=p.result===b.dataset.r?null:b.dataset.r;save();renderTracker();});
   $("entryList").querySelectorAll("[data-ret]").forEach(inp=>inp.onchange=()=>{const e=state.entries.find(x=>x.id===inp.dataset.ret);e.returned=inp.value===""?null:parseFloat(inp.value);save();renderTracker();});
   let arm=null;$("entryList").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{if(arm!==b.dataset.del){arm=b.dataset.del;b.textContent="Tap again";return;}state.entries=state.entries.filter(x=>x.id!==b.dataset.del);save();renderTracker();});
