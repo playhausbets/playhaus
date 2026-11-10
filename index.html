@@ -234,6 +234,12 @@ summary{cursor:pointer;padding:4px 0}
     <div class="note">Owner tools only change what this phone shows. Posting still requires your GitHub login.</div>
   </div>
   <div class="card">
+    <b>💾 Backup & restore</b>
+    <div class="note">Your tracker, stars, bankroll and settings are saved on this phone only. Back up now and then — if you clear your browser or switch phones, restore from the file.</div>
+    <div class="row" style="margin-top:8px"><button class="btn ghost sm" id="bkSave" style="flex:1">💾 Back up</button><label class="btn ghost sm" style="flex:1;text-align:center;margin:0;cursor:pointer">📂 Restore<input type="file" id="bkLoad" accept=".json,application/json" style="display:none"></label></div>
+    <div class="note" id="restoreMsg"></div>
+  </div>
+  <div class="card">
     <b>💵 Bankroll</b>
     <div class="note">Sets suggested entry sizes (quarter-Kelly, never more than 2 units) and a daily stop.</div>
     <div class="row">
@@ -1468,7 +1474,8 @@ async function renderFavs(){
       <div style="font-size:13px"><b class="${x.side==="More"?"more":"less"}">${x.side==="More"?"▲ Over":"▼ Under"} ${x.line}</b> ${esc(x.stat)}${x.proj!=null?` <span class="mut">· proj ${x.proj.toFixed(1)}</span>`:""}</div>
       ${x.hits!=null?`<div class="mut" style="font-size:11px">Hit ${x.hits} of last ${x.n}${x.when?" · "+esc(x.when):""}</div>`:""}</div><span class="grade g${x.grade[0]}">${pct(x.conf)}</span>${starBtn(x.sport,x.player)}</div>`).join(""):"";}).join("")}
     <div class="note">Confidence = the bot's chance the play hits, after matchup, injuries, rest and recent form. A research tool, not a guarantee.</div></div>`;
-  el.innerHTML=html;wireFavs(el,list,sl);
+  html+=favRecordHTML();
+  el.innerHTML=html;wireFavs(el,list,sl);ensureFavRecord();
 }
 function wireFavs(el,list,sl){
   el.querySelectorAll("#favSp button").forEach(b=>b.onclick=()=>{favSport=b.dataset.fs;renderFavs();});
@@ -1550,6 +1557,91 @@ function boostsHTML(sp,S,list){
     ${g.rows.length?`<table style="margin-top:8px"><tr><th>Teammate</th><th class="r">Without</th><th class="r">With</th><th class="r">Diff</th></tr>${g.rows.map(r=>`<tr data-lab="${sp}|${esc(r.x.player)}|${esc(injStat)}"><td><b>${esc(r.x.player)}</b><div class="mut" style="font-size:11px">${r.n} games without${r.x.stats[injStat]?` · today's proj ${r.x.stats[injStat].proj.toFixed(1)}`:""}</div></td><td class="r"><b>${r.a.toFixed(1)}</b></td><td class="r mut">${r.b.toFixed(1)}</td><td class="r ${r.d>=0.5?"more":r.d<=-0.5?"less":"mut"}"><b>${r.d>=0?"+":""}${r.d.toFixed(1)}</b></td></tr>`).join("")}</table>`
       :`<div class="note">Not enough games without him yet to compare.</div>`}</div>`).join("")+`</div><div class="note">Tap a teammate to open them in the Vault. Fewer than 5 games without = small sample.</div>`;
 }
+/* =================== FAVS TRACK RECORD (backtest, same for every visitor) =================== */
+let FAVREC=null,favRecBusy=false;
+function favPickFor(S,sp,pi,sn,ctx,rowsBefore,season){
+  const st=findStat(sp,sn);if(!st)return null;
+  const last=rowsBefore.slice(-10).map(i=>st[2](S.c,i));if(last.length<6)return null;
+  const seas=rowsBefore.filter(i=>S.c.s[i]===season).map(i=>st[2](S.c,i));
+  const ref=seas.length>=3?0.5*mean(last)+0.5*mean(seas):mean(last);if(!(ref>=(S.bb?1:0.5)))return null;
+  const line=Math.round(ref-0.5)+0.5;if(line<(FAV_MIN[sn]||0))return null;
+  const a=analyzeProp(S,pi,st,line,ctx);if(a.err||a.grade==="Pass")return null;
+  const hits=last.filter(v=>a.side==="More"?v>line:v<line).length;if(hits<5)return null;
+  return {stat:sn,line,side:a.side,conf:a.conf,grade:a.grade,proj:a.proj,hits,score:a.conf+0.01*hits};
+}
+function pickTen(cand){
+  cand.sort((a,b)=>b.score-a.score);const ps=new Set(),pt={},pst={},pool=[];
+  for(const x of cand){const k=normName(x.player);if(ps.has(k)||(pt[x.team]||0)>=2||(pst[x.stat]||0)>=3)continue;ps.add(k);pt[x.team]=(pt[x.team]||0)+1;pst[x.stat]=(pst[x.stat]||0)+1;pool.push(x);}
+  const ov=pool.filter(x=>x.side==="More"),un=pool.filter(x=>x.side!=="More");
+  let no=Math.min(5,ov.length),nu=Math.min(5,un.length);no=Math.min(ov.length,10-nu);nu=Math.min(un.length,10-no);
+  return [...ov.slice(0,no),...un.slice(0,nu)].sort((a,b)=>b.score-a.score);
+}
+async function buildFavRecord(sp,nDays,onProgress){
+  const S=D[sp];if(!S)return null;const c=S.c;
+  const days=[...new Set(Array.from(c.d))].sort((a,b)=>a-b).filter(d=>d<=S.maxD).slice(-nDays);
+  const out=[];
+  for(let k=0;k<days.length;k++){
+    const d=days[k];const cand=[];
+    for(let i=0;i<S.n;i++){if(c.d[i]!==d)continue;const pi=c.p[i];
+      const before=S.by[pi].filter(j=>c.d[j]<d);if(before.length<6)continue;
+      if(S.bb&&mean(before.slice(-8).map(j=>c.min[j]))<24)continue;
+      const season=c.s[i];
+      const ctx={outSet:new Set(),opp:c.o[i],home:c.h[i],bt:{cutoff:d,season},gameDay:d};
+      (S.bb?FAV_STATS.bb:(FAV_STATS[S.pg[pi]]||FAV_STATS.WR)).forEach(sn=>{const f=favPickFor(S,sp,pi,sn,ctx,before,season);if(!f)return;
+        const actual=findStat(sp,sn)[2](c,i);
+        cand.push({...f,sport:sp,player:S.players[pi][0],team:S.teams[c.t[i]],opp:S.teams[c.o[i]],actual,hit:f.side==="More"?actual>f.line:actual<f.line,push:actual===f.line});});
+    }
+    const ten=pickTen(cand);
+    if(ten.length){const sl=favSlip(ten,Math.min(3,ten.length));out.push({d,picks:ten,slip:sl.picks.map(x=>x.player),slipHit:sl.picks.length===3&&sl.picks.every(x=>x.hit)});}
+    if(onProgress)onProgress(k+1,days.length);
+    await new Promise(r=>setTimeout(r,0));
+  }
+  return out;
+}
+function recSummary(rec){
+  const all=rec.flatMap(r=>r.picks).filter(x=>!x.push);const w=all.filter(x=>x.hit).length;
+  const ov=all.filter(x=>x.side==="More"),un=all.filter(x=>x.side!=="More");
+  const slips=rec.filter(r=>r.slip.length===3),sw=slips.filter(r=>r.slipHit).length;
+  const mult=state.payouts[3]||5,stake=5,profit=sw*stake*mult-slips.length*stake;
+  return {w,l:all.length-w,ow:ov.filter(x=>x.hit).length,on:ov.length,uw:un.filter(x=>x.hit).length,un:un.length,sw,sn:slips.length,profit,mult};
+}
+function favRecordHTML(){
+  if(!FAVREC)return `<div class="card" id="favRecCard"><b>📊 Favs track record</b><div class="note">Replays the bot's Favs on the last 30 NBA game days and grades every pick against what actually happened.</div><div id="favRecProg" class="note"></div></div>`;
+  const r=recSummary(FAVREC.rec);const pctW=(a,b)=>b?Math.round(a/b*100)+"%":"—";
+  const fmtD=d=>{const t=new Date(Date.UTC(2022,0,1)+d*864e5);return (t.getUTCMonth()+1)+"/"+t.getUTCDate();};
+  return `<div class="card" id="favRecCard"><b>📊 Favs track record</b> <span class="mut" style="font-size:12px">NBA · last ${FAVREC.rec.length} game days</span>
+    <div class="stats" style="margin-top:8px"><div class="stat"><b>${r.w}–${r.l}</b><span>Picks (${pctW(r.w,r.w+r.l)}) vs est. lines</span></div><div class="stat"><b>${pctW(r.ow,r.on)}</b><span>Overs hit</span></div><div class="stat"><b>${pctW(r.uw,r.un)}</b><span>Unders hit</span></div></div>
+    <div class="stats"><div class="stat"><b>${r.sw}/${r.sn}</b><span>3-pick fav slip hit</span></div><div class="stat"><b class="${r.profit>=0?"more":"less"}">${r.profit>=0?"+":"−"}$${Math.abs(r.profit).toFixed(0)}</b><span>$5 slip daily @ ${r.mult}x</span></div>${(()=>{const be=breakeven(3,r.mult);const ok=r.w+r.l&&r.w/(r.w+r.l)>=be;return `<div class="stat"><b>${ok?"✅ ":""}${(be*100).toFixed(1)}%</b><span>Break-even per pick (3-pick)</span></div>`;})()}</div>
+    <details style="margin-top:8px"><summary class="mut" style="font-size:13px;cursor:pointer">Day by day</summary>
+      <table style="margin-top:6px"><tr><th>Day</th><th class="r">Picks</th><th class="r">Slip</th></tr>${FAVREC.rec.slice().reverse().map(x=>{const g=x.picks.filter(p=>!p.push),w=g.filter(p=>p.hit).length;return `<tr><td>${fmtD(x.d)}</td><td class="r">${w}–${g.length-w}</td><td class="r ${x.slipHit?"more":"less"}">${x.slip.length===3?(x.slipHit?"✅ Hit":"✗"):"—"}</td></tr>`;}).join("")}</table></details>
+    <div class="note">Backtest: every pick is made using only stats from before that day, with the same estimated lines Favs uses today. Real PrizePicks lines are sharper, so expect a lower hit rate against them. Injuries from those days aren't included. Past results don't guarantee future ones.</div></div>`;
+}
+async function ensureFavRecord(){
+  if(FAVREC||favRecBusy||!D.NBA)return;
+  const key="ph_favrec_v1_"+D.NBA.maxD;
+  const swap=()=>{const card=$("favRecCard");if(card){const t=document.createElement("div");t.innerHTML=favRecordHTML();card.replaceWith(t.firstElementChild);}};
+  try{const c=localStorage.getItem(key);if(c){FAVREC={rec:JSON.parse(c)};swap();return;}}catch(e){}
+  favRecBusy=true;
+  const rec=await buildFavRecord("NBA",30,(k,n)=>{const el=$("favRecProg");if(el)el.textContent=`Crunching day ${k} of ${n}…`;});
+  favRecBusy=false;FAVREC={rec:rec||[]};
+  try{Object.keys(localStorage).filter(k=>k.startsWith("ph_favrec_")).forEach(k=>localStorage.removeItem(k));localStorage.setItem(key,JSON.stringify(rec.map(x=>({...x,picks:x.picks.map(p=>({player:p.player,team:p.team,stat:p.stat,line:p.line,side:p.side,hit:p.hit,push:p.push,actual:p.actual}))}))));}catch(e){}
+  swap();
+}
+/* =================== BACKUP / RESTORE =================== */
+async function backupNow(){
+  const txt=JSON.stringify({app:"playhaus",v:1,saved:new Date().toISOString(),state}),fn="playhaus-backup-"+etToday()+".json";
+  if(window.claude&&window.claude.use){try{const dl=await window.claude.use("downloads");if(dl){await dl.save({filename:fn,data:txt});toast("💾 Backup saved");return;}}catch(e){toast("Backup cancelled");return;}}
+  const blob=new Blob([txt],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="playhaus-backup-"+etToday()+".json";document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500);toast("💾 Backup saved to your downloads");
+}
+function restoreFrom(text){
+  let d;try{d=JSON.parse(text);}catch(e){toast("That isn't a Play Haus backup");return;}
+  const st=d&&d.app==="playhaus"?d.state:d;if(!st||!Array.isArray(st.entries)){toast("That isn't a Play Haus backup");return;}
+  if(!confirmRestore(st))return;
+  merge(st);save();applyTheme&&applyTheme();renderAll();renderSettings();toast(`✅ Restored ${st.entries.length} entries`);
+}
+function confirmRestore(st){const b=$("restoreMsg");if(!b)return true;b.innerHTML=`Restoring replaces what's on this phone with the backup (${st.entries.length} entries, ${(st.stars||[]).length} stars).`;return true;}
 /* =================== RENDER: SLATE =================== */
 let selected=new Set(),bType="power",openId=null;
 const sgn=x=>(x>=0?"+":"")+x.toFixed(0)+"%";
@@ -2042,6 +2134,7 @@ $("set-dark").onchange=e=>{state.dark=e.target.checked;applyTheme();save();};
 $("set-owner").onchange=e=>{state.owner=e.target.checked;save();renderAll();if(!$("v-haus").classList.contains("hide"))renderHaus();};
 $("saveBank").onclick=()=>{state.bank={start:parseFloat($("bk-start").value)||0,unit:parseFloat($("bk-unit").value)||2,limit:parseFloat($("bk-limit").value)||0};save();renderAll();toast("Bankroll saved");};
 $("showTpl").onclick=()=>$("tpl").classList.toggle("hide");
+$("bkSave").onclick=backupNow;$("bkLoad").onchange=e=>{const f=e.target.files[0];if(!f)return;f.text().then(restoreFrom);e.target.value="";};
 $("lookBtn").onclick=runLookup;$("l-watch").onclick=toggleWatch;
 $("l-star").onclick=()=>{const m=findPlayer($("l-player").value)[0];if(!m){toast("Pick a player first");return;}toggleStar(m.sport,D[m.sport].players[m.i][0]);};
 $("autoGrade").onclick=()=>{const n=autoGrade();toast(n?`Graded ${n} picks`:"No new results in the data yet");};
