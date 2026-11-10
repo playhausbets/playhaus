@@ -22,7 +22,8 @@ h1{font-size:20px;margin:0}
 .sub{color:var(--mut);font-size:12px}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#F2E6D9;border-top:1px solid var(--line);z-index:5;overflow-x:auto;scrollbar-width:none}
 nav::-webkit-scrollbar{display:none}
-nav button{flex:1 0 auto;background:none;border:0;color:var(--mut);padding:12px 9px calc(14px + env(safe-area-inset-bottom));font-size:12.5px;font-weight:600;white-space:nowrap}
+nav button{flex:1 1 0;min-width:0;background:none;border:0;color:var(--mut);padding:7px 1px calc(8px + env(safe-area-inset-bottom));font-size:10px;font-weight:700;white-space:nowrap;display:flex;flex-direction:column;align-items:center;gap:2px;letter-spacing:-.1px}
+nav button i{font-style:normal;font-size:18px;line-height:1}#pieceCount{font-size:9px}
 nav button.on{color:var(--txt);box-shadow:inset 0 2px 0 var(--acc)}
 main{padding:4px 12px;max-width:640px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
@@ -94,7 +95,7 @@ html.dark .bannerwrap img{border-radius:14px}
   .split>.card{position:sticky;top:12px;margin-top:10px}
   #boardOut>.seg{max-width:620px}
   #gamesOut>.seg{max-width:620px}
-  nav{justify-content:center}nav button{flex:0 0 auto;padding-left:22px;padding-right:22px;font-size:14px}
+  nav{justify-content:center}nav button{flex:0 0 auto;flex-direction:row;gap:6px;padding:12px 18px calc(14px + env(safe-area-inset-bottom));font-size:14px}nav button i{font-size:16px}
   .card{padding:18px}
 }
 @media (min-width:1400px){#slateOut,#v-set{column-count:3}}
@@ -282,15 +283,15 @@ summary{cursor:pointer;padding:4px 0}
 </main>
 
 <nav>
-  <button data-v="games" class="on">Games</button>
-  <button data-v="haus">🔥 Haus Picks</button>
-  <button data-v="favs">🤖 Favs</button>
-  <button data-v="today">Picks</button>
-  <button data-v="piece">Piece It <span id="pieceCount"></span></button>
-  <button data-v="board">Board</button>
-  <button data-v="look">Vault</button>
-  <button data-v="track">Tracker</button>
-  <button data-v="set">⚙️</button>
+  <button data-v="games" class="on"><i>🏟️</i>Games</button>
+  <button data-v="haus"><i>🔥</i>Haus</button>
+  <button data-v="favs"><i>🤖</i>Favs</button>
+  <button data-v="today"><i>📋</i>Picks</button>
+  <button data-v="piece"><i>🧩</i>Piece It<span id="pieceCount"></span></button>
+  <button data-v="board"><i>📊</i>Board</button>
+  <button data-v="look"><i>🔐</i>Vault</button>
+  <button data-v="track"><i>📈</i>Tracker</button>
+  <button data-v="set"><i>⚙️</i>More</button>
 </nav>
 <div class="toast" id="toast"></div>
 <div class="load hide" id="shareModal" style="z-index:40;padding:20px;background:rgba(20,17,15,.92)"><img alt="Your slip" style="max-width:100%;max-height:72vh;border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.4)"><div style="color:#F3E9DF;font-size:14px;text-align:center">Press and hold the image to save or share it.</div><button class="btn" id="shareClose" style="max-width:320px">Close</button></div>
