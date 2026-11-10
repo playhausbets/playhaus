@@ -1349,6 +1349,7 @@ function applyTheme(){document.documentElement.classList.toggle("dark",!!state.d
 
 document.addEventListener("click",e=>{const b=e.target.closest("#chartSeg button");if(b&&!b.disabled){const card=b.closest(".card");card.querySelectorAll("#chartSeg button").forEach(x=>x.classList.toggle("on",x===b));card.querySelectorAll("[data-cpane]").forEach(p=>p.style.display=p.dataset.cpane===b.dataset.cv?"":"none");const t=card.querySelector("#barTip");if(t)t.textContent="Hover or tap a bar to see the game.";return;}
   const g=e.target.closest(".bg");if(g){const on=!g.classList.contains("on");g.closest("svg").querySelectorAll(".bg.on").forEach(x=>x.classList.remove("on"));if(on)g.classList.add("on");const t=g.closest(".card").querySelector("#barTip");if(t)t.textContent=on?g.dataset.tip:"Hover or tap a bar to see the game.";}});
+document.addEventListener("click",e=>{const b=e.target.closest("#wwMates button");if(!b)return;wwMate=+b.dataset.ww;if(LAB){const card=b.closest(".card");const h=withoutHTML(LAB.p.sport,LAB.S,LAB.i);const tmp=document.createElement("div");tmp.innerHTML=h;card.replaceWith(tmp.firstElementChild);}});
 document.addEventListener("mouseover",e=>{const g=e.target.closest&&e.target.closest(".bg");if(!g)return;const t=g.closest(".card")&&g.closest(".card").querySelector("#barTip");if(t)t.textContent=g.dataset.tip;});
 /* =================== LINEUPS + PROJ LINE =================== */
 function projLine(r){
@@ -1483,6 +1484,71 @@ function wireFavs(el,list,sl){
   const sh=$("favShare");if(sh)sh.onclick=()=>shareSlip({title:"Claude's Favs",sub:fmtDay(etToday()),picks:sl.picks,type:"power",mult:sl.mult,all:sl.all});
   const sa=$("favStar");if(sa)sa.onclick=()=>{let k=0;sl.picks.forEach(p=>{if(!(state.stars||[]).some(z=>z.sport===p.sport&&normName(z.name)===normName(p.player))){toggleStar(p.sport,p.player);k++;}});toast(k?`⭐ Starred ${k} player${k>1?"s":""} — see Piece It`:"Already starred");renderFavs();};
   const hh=$("favHaus");if(hh)hh.onclick=()=>addToHaus(sl.picks,{type:"power",mult:sl.mult,all:sl.all});
+}
+/* =================== WITH / WITHOUT (teammates out) =================== */
+let injStat=null,wwMate=null;
+function onOffRows(S,pi,mate){
+  // games for pi (this season + last) on mate's team, split by whether mate played
+  const c=S.c,team=S.lastTeam[pi];if(team<0||S.lastTeam[mate]!==team)return null;
+  const span={};S.by[mate].forEach(j=>{if(c.t[j]!==team||c.s[j]<S.cur-1)return;const o=span[c.s[j]]||(span[c.s[j]]={a:c.d[j],b:c.d[j]});o.a=Math.min(o.a,c.d[j]);o.b=Math.max(o.b,c.d[j]);});
+  const stillHere=S.lastTeam[mate]===team;
+  for(const sz of [S.cur-1,S.cur]){
+    // missed a whole season (long injury) but was on the team before and still is
+    if(!span[sz]&&stillHere&&S.by[mate].some(j=>c.t[j]===team&&c.s[j]<sz))span[sz]={a:-Infinity,b:Infinity};
+  }
+  if(span[S.cur]&&stillHere){span[S.cur].b=Infinity;if(!S.by[mate].some(j=>c.s[j]===S.cur&&c.t[j]!==team))span[S.cur].a=-Infinity;}
+  const wo=[],wi=[];
+  S.by[pi].forEach(i=>{if(c.t[i]!==team||c.s[i]<S.cur-1)return;const sp=span[c.s[i]];if(!sp||c.d[i]<sp.a||c.d[i]>sp.b)return;
+    const app=S.tg.get(team*100000+c.d[i])||[];(app.includes(mate)?wi:wo).push(i);});
+  return {wo,wi};
+}
+const WW_STATS={bb:[["PTS","Points"],["REB","Rebounds"],["AST","Assists"],["PRA","Pts+Rebs+Asts"],["3PM","3-PT Made"]],
+  QB:[["Pass yds","Pass Yards"],["Pass TD","Pass TDs"],["Rush yds","Rush Yards"]],RB:[["Rush yds","Rush Yards"],["Rec","Receptions"],["Total yds","Rush+Rec Yds"]],
+  WR:[["Rec","Receptions"],["Rec yds","Receiving Yards"],["Targets","Targets"]],TE:[["Rec","Receptions"],["Rec yds","Receiving Yards"],["Targets","Targets"]]};
+function wwStats(S,pi){return S.bb?WW_STATS.bb:(WW_STATS[S.pg[pi]]||WW_STATS.WR);}
+function keyMates(S,pi){const c=S.c,team=S.lastTeam[pi];if(team<0)return [];
+  const out=[];S.lastTeam.forEach((t,q)=>{if(t!==team||q===pi)return;const r=S.by[q].filter(i=>c.t[i]===team&&c.s[i]>=S.cur-1).slice(-15);if(r.length<4)return;
+    const v=S.bb?mean(r.map(i=>c.min[i])):mean(r.map(i=>c.fp10[i]/10));if(v>=(S.bb?20:6))out.push({q,v});});
+  return out.sort((a,b)=>b.v-a.v).map(x=>x.q);}
+function withoutHTML(sport,S,i){
+  const mates=keyMates(S,i);if(!mates.length)return "";
+  const outs=outSetFor(sport),outMates=mates.filter(q=>outs.has(q));
+  if(wwMate==null||!mates.includes(wwMate)||(S.lastTeam[wwMate]!==S.lastTeam[i]))wwMate=outMates[0]??mates[0];
+  const q=wwMate,sp=onOffRows(S,i,q);if(!sp)return "";
+  const c=S.c,list=wwStats(S,i);
+  const avg=(rows,sn)=>{const st=findStat(sport,sn);return st&&rows.length?mean(rows.map(j=>st[2](c,j))):NaN;};
+  const rowsHTML=(S.bb?[["MIN",null]]:[]).concat(list).map(([lab,sn])=>{const a=sn?avg(sp.wo,sn):mean(sp.wo.map(j=>c.min[j])),b=sn?avg(sp.wi,sn):mean(sp.wi.map(j=>c.min[j]));const d=a-b;
+    return `<tr><td>${esc(lab)}</td><td class="r"><b>${isNaN(a)?"—":a.toFixed(1)}</b></td><td class="r mut">${isNaN(b)?"—":b.toFixed(1)}</td><td class="r ${!isNaN(d)&&d>=0.5?"more":!isNaN(d)&&d<=-0.5?"less":"mut"}">${isNaN(d)?"":(d>=0?"+":"")+d.toFixed(1)}</td></tr>`;}).join("");
+  const nm=S.players[q][0],status=injuryList().find(z=>normName(z.name)===normName(nm));
+  return `<div class="card"><b>🚑 When a teammate sits</b> <span class="mut" style="font-size:12px">this season + last</span>
+    ${outMates.length?`<div class="note" style="margin-top:4px"><b style="color:#B42318">Out today:</b> ${outMates.map(x=>esc(S.players[x][0])).join(", ")}</div>`:""}
+    <div class="chips" style="margin-top:8px" id="wwMates">${mates.slice(0,10).map(x=>`<button data-ww="${x}" class="${x===q?"on":""}">${outs.has(x)?"🚑 ":""}${esc(S.players[x][0].replace(/\s+(jr\.?|sr\.?|ii|iii|iv)$/i,"").split(" ").slice(-1)[0])}</button>`).join("")}</div>
+    <div style="margin-top:6px;font-size:13px">Without <b>${esc(nm)}</b>${status?` <span class="tag q">${esc(status.status)}</span>`:""}: <b>${sp.wo.length}</b> game${sp.wo.length===1?"":"s"} · with him: ${sp.wi.length}</div>
+    ${sp.wo.length?`<table style="margin-top:6px"><tr><th>Stat</th><th class="r">Without</th><th class="r">With</th><th class="r">Diff</th></tr>${rowsHTML}</table>`:`<div class="note">They haven't played a game without ${esc(nm)} in the last 2 seasons.</div>`}
+    <div class="note">${sp.wo.length&&sp.wo.length<5?"⚠ Small sample — treat with caution. ":""}Only counts games when both were on the same team. The projection already factors in today's injuries.</div></div>`;
+}
+function boostsHTML(sp,S,list){
+  const outs=outSetFor(sp),games=slateGames(sp),teams=new Set(games.flatMap(g=>[g.home,g.away]));
+  const statOpts=S.bb?WW_STATS.bb:[["Rec yds","Receiving Yards"],["Rush yds","Rush Yards"],["Rec","Receptions"],["Pass yds","Pass Yards"]];
+  if(!injStat||!statOpts.some(x=>x[1]===injStat))injStat=statOpts[0][1];
+  const st=findStat(sp,injStat);const c=S.c;
+  const groups=[];
+  [...outs].forEach(q=>{const t=S.teams[S.lastTeam[q]];if(!teams.has(t))return;
+    const r=S.by[q].filter(i=>c.t[i]===S.lastTeam[q]&&c.s[i]>=S.cur-1).slice(-15);if(r.length<4)return;
+    const big=S.bb?mean(r.map(i=>c.min[i])):mean(r.map(i=>c.fp10[i]/10));if(big<(S.bb?22:7))return;
+    const rows=[];
+    list.filter(x=>x.team===t&&x.pi!==q).forEach(x=>{const o=onOffRows(S,x.pi,q);if(!o||o.wo.length<3||o.wi.length<3)return;
+      const a=mean(o.wo.map(j=>st[2](c,j))),b=mean(o.wi.map(j=>st[2](c,j)));rows.push({x,a,b,d:a-b,n:o.wo.length});});
+    rows.sort((u,v)=>v.d-u.d);
+    groups.push({q,t,big,rows:rows.slice(0,6),prev:mean(r.map(i=>st[2](c,i)))});
+  });
+  groups.sort((a,b)=>b.big-a.big);
+  let html=`<div class="card"><b>🚑 Injury boosts</b><div class="note">Key players ruled out today, and which teammates have put up more (or less) without them — this season and last.</div>
+    <div class="chips" style="margin-top:8px" id="ibStat">${statOpts.map(([l,sn])=>`<button data-ib="${esc(sn)}" class="${sn===injStat?"on":""}">${esc(l)}</button>`).join("")}</div></div>`;
+  if(!groups.length)return html+`<div class="card empty">No key ${sp} players are ruled out for the next games right now.</div>`;
+  return html+`<div class="ggrid">`+groups.map(g=>`<div class="card"><div style="display:flex;align-items:center;gap:10px">${avatar(sp,S.players[g.q][0],g.t,40)}<div><b>${esc(S.players[g.q][0])}</b> <span class="tag q">OUT</span><div class="mut" style="font-size:12px">${esc(g.t)} · usually ${g.prev.toFixed(1)} ${esc(injStat)}</div></div></div>
+    ${g.rows.length?`<table style="margin-top:8px"><tr><th>Teammate</th><th class="r">Without</th><th class="r">With</th><th class="r">Diff</th></tr>${g.rows.map(r=>`<tr data-lab="${sp}|${esc(r.x.player)}|${esc(injStat)}"><td><b>${esc(r.x.player)}</b><div class="mut" style="font-size:11px">${r.n} games without${r.x.stats[injStat]?` · today's proj ${r.x.stats[injStat].proj.toFixed(1)}`:""}</div></td><td class="r"><b>${r.a.toFixed(1)}</b></td><td class="r mut">${r.b.toFixed(1)}</td><td class="r ${r.d>=0.5?"more":r.d<=-0.5?"less":"mut"}"><b>${r.d>=0?"+":""}${r.d.toFixed(1)}</b></td></tr>`).join("")}</table>`
+      :`<div class="note">Not enough games without him yet to compare.</div>`}</div>`).join("")+`</div><div class="note">Tap a teammate to open them in the Vault. Fewer than 5 games without = small sample.</div>`;
 }
 /* =================== RENDER: SLATE =================== */
 let selected=new Set(),bType="power",openId=null;
@@ -1695,7 +1761,7 @@ function renderBoard(){
     ensureSport(sp).then(ok=>{if(ok)renderBoard();});return;}
   const S=D[sp],list=boardFor(sp),games=slateGames(sp);
   let html=`<div class="seg" id="bSport">${SPORTS.map(x=>`<button data-s="${x}" class="${sp===x?"on":""}">${SPORT_LABEL[x]}</button>`).join("")}</div>
-    <div class="chips" id="bSeg">${[["proj","Projections"],["ceil","Ceilings"],["streak","🔥 Streaks"],["def","🛡 Defense"],["match","Matchups"],["watch","Watchlist"]].map(([k,l])=>`<button data-b="${k}" class="${boardSeg===k?"on":""}">${l}</button>`).join("")}</div>`;
+    <div class="chips" id="bSeg">${[["proj","Projections"],["ceil","Ceilings"],["streak","🔥 Streaks"],["def","🛡 Defense"],["inj","🚑 Injury boosts"],["match","Matchups"],["watch","Watchlist"]].map(([k,l])=>`<button data-b="${k}" class="${boardSeg===k?"on":""}">${l}</button>`).join("")}</div>`;
   if(boardSeg==="def"){html+=defenseHTML(sp,S);}
   else if(!games.length&&boardSeg!=="watch"){html+=`<div class="card empty">No ${sp} games on the schedule in the next few days.</div>`;}
   else if(boardSeg==="proj"){
@@ -1707,6 +1773,7 @@ function renderBoard(){
       <table style="margin-top:8px"><tr><th>Player</th>${isBB(sp)?'<th class="r">MIN</th>':""}<th class="r">Proj</th><th class="r">90th</th><th class="r">Form</th><th></th></tr>
       ${rows.slice(0,60).map(r=>{const s=r.stats[sn];return `<tr data-lab="${r.sport}|${esc(r.player)}|${esc(sn)}"><td><b>${esc(r.player)}</b>${r.q?' <span class="tag q">Q</span>':""}<div class="mut" style="font-size:11px">${esc(r.team)} ${r.home?"vs":"@"} ${esc(r.opp)}${r.usg!=null?` · USG ${r.usg.toFixed(0)}%`:""}</div>${isBB(sp)?`<div style="font-size:11px;margin-top:2px">${[["Points","PTS"],["Rebounds","REB"],["Assists","AST"],["Turnovers","TO"]].filter(([k])=>k!==sn&&r.stats[k]).map(([k,l])=>`<span class="mut">${l}</span> <b>${r.stats[k].proj.toFixed(1)}</b>`).join(" · ")}</div>`:""}</td>${isBB(sp)?`<td class="r mut">${r.minS!=null&&!isNaN(r.minS)?r.minS.toFixed(1):"—"}</td>`:""}<td class="r"><b>${s.proj.toFixed(1)}</b></td><td class="r mut">${s.p90.toFixed(1)}</td><td class="r ${r.trend>0.5?"more":r.trend<-0.5?"less":"mut"}">${r.head===sn?(r.trend>0?"▲":"▼")+Math.abs(r.trend).toFixed(1):""}</td><td class="r">${starBtn(r.sport,r.player)}</td></tr>`;}).join("")}</table>
       <div class="note">${isBB(sp)?"MIN = average minutes this season. ":""}Form = last 5 games vs season average on their main stat. 90th = a strong-night outcome.</div></div>`;
+  }else if(boardSeg==="inj"){html+=boostsHTML(sp,S,list);
   }else if(boardSeg==="streak"){html+=streaksHTML(sp,S,list);
   }else if(boardSeg==="ceil"){
     const ms=MILESTONES[sp],m=ms[Math.min(msSel,ms.length-1)];const st=findStat(sp,m[1]);
@@ -1744,6 +1811,7 @@ function renderBoard(){
   el.innerHTML=html;
   el.querySelectorAll("#bSport button").forEach(b=>b.onclick=()=>{boardSport=b.dataset.s;renderBoard();});
   el.querySelectorAll("#bSeg button").forEach(b=>b.onclick=()=>{boardSeg=b.dataset.b;renderBoard();});
+  el.querySelectorAll("#ibStat button").forEach(b=>b.onclick=()=>{injStat=b.dataset.ib;renderBoard();});
   el.querySelectorAll("#stF button").forEach(b=>b.onclick=()=>{streakFilter=b.dataset.f;renderBoard();});
   el.querySelectorAll("[data-dsort]").forEach(h=>h.onclick=()=>{defSort=+h.dataset.dsort;renderBoard();});
   const da=$("defAll");if(da)da.onclick=e=>{e.preventDefault();defAll=!defAll;renderBoard();};
@@ -1844,6 +1912,7 @@ function runLookup(){
     <div class="card"><b>Recent production</b> <span class="mut" style="font-size:12px">dashed = ${line}</span>${svg}
       ${nba?`<div class="stats"><div class="stat"><b>${usgL5.toFixed(1)}%</b><span>Usage L5</span></div><div class="stat"><b>${isNaN(usgS)?"—":usgS.toFixed(1)+"%"}</b><span>Usage season</span></div><div class="stat"><b>${minL5.toFixed(1)} / ${isNaN(minS)?"—":minS.toFixed(1)}</b><span>Avg min L5 / ${isNaN(minS)?"(none this szn)":"szn"}</span></div></div><div class="note">Usage = share of team plays a player finishes (shots, free throws, turnovers) while on the floor.</div>`:""}</div>
     <div class="card" style="padding-top:4px">${detail(p)}</div>
+    ${withoutHTML(sport,S,i)}
     ${ladderHTML(sim,line,S,i,st)}
     <div class="card"><b>🎲 Simulation</b> <span class="mut" style="font-size:12px">5,000 draws${mins?` at ${mins} min`:""}</span>
       <table style="margin-top:6px"><tr><th>Stat</th><th class="r">Proj</th><th class="r">80% range</th><th class="r">Ceiling (95th)</th></tr>${simRows}</table>
