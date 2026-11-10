@@ -152,9 +152,9 @@ summary{cursor:pointer;padding:4px 0}
   <div class="card">
     <b>Today's slate</b>
     <div class="note">Upload today's PrizePicks lines and the injury report. CSV or Excel. One Excel file with a "Lines" sheet and an "Injuries" sheet works too.</div>
-    <div class="drop" id="dropLines"><input type="file" id="fileLines" accept=".csv,.xlsx,.xls,.txt"><b>📋 Lines file</b><span class="mut" id="linesName">Player, Stat, Line, Opponent</span></div>
+    <div class="drop" id="dropLines"><input type="file" id="fileLines" accept=".csv,.xlsx,.xls,.txt,image/*"><b>📋 Lines file</b><span class="mut" id="linesName">CSV/Excel (Player, Stat, Line) or a screenshot</span></div>
     <div class="drop" id="dropInj"><input type="file" id="fileInj" accept=".csv,.xlsx,.xls,.txt"><b>🩹 Injury report</b><span class="mut" id="injName">Player, Status (Out / Doubtful / Questionable)</span></div>
-    <div class="drop hide" id="dropShot"><input type="file" id="fileShot" accept="image/*" multiple><b>📸 Screenshot of board</b><span class="mut" id="shotName">Let Claude read your PrizePicks board</span></div>
+    <div class="drop" id="dropShot"><input type="file" id="fileShot" accept="image/*" multiple><b>📸 Screenshots from your photos</b><span class="mut" id="shotName">Pick PrizePicks screenshots — it reads the players and lines</span></div>
     <div id="queue"></div>
     <div class="note">No injury file? The bot already loads the official NFL report and flags NBA players who missed their team's recent games. Opponents, home/away, rest and NFL spreads/totals fill in from the schedule.</div>
     <button class="btn" id="runSlate" disabled>Build my lineup</button>
@@ -857,10 +857,11 @@ let sampler=null;
 async function initSampler(){
   try{if(!window.claude||!window.claude.use)return;const s=await window.claude.use("sample");if(!s)return;
     let ok=true;try{const l=await s.limits();ok=!!(l&&l.images);}catch(e){}
-    if(ok){sampler=s;$("dropShot").classList.remove("hide");}}catch(e){}
+    if(ok){sampler=s;}}catch(e){}
 }
 async function readShots(files){
-  if(!sampler||!files.length)return;
+  if(!files.length)return;
+  if(!sampler)return ocrShots(files);
   $("shotName").textContent="Reading "+files.length+" screenshot"+(files.length>1?"s":"")+"…";
   const prompt=`These are screenshots of the PrizePicks app (NBA and/or NFL player props). Extract EVERY player prop card that is fully visible.
 Return ONLY a JSON array, no other text. Each item: {"player": full name as shown, "stat": stat label exactly as shown (e.g. "Points", "Pts+Rebs+Asts", "3-PT Made", "Rush Yards", "Receptions"), "line": number, "opponent": "vs XXX" or "@ XXX" if shown else "", "type": "Goblin" or "Demon" if the card shows a goblin/demon icon or label, else "Standard"}.
@@ -876,11 +877,83 @@ Skip cards that are cut off. Never invent players or numbers.`;
     const code=e&&e.code;$("shotName").textContent=code==="not_granted"?"Screenshot reading wasn't allowed":code==="rate_limited"?"Too many requests — try again in a minute":"Couldn't read that — try a clearer screenshot";
   }
 }
+/* in-browser screenshot reading (GitHub site): Tesseract OCR + match names against our player database */
+let tessP=null;
+function loadTess(){if(window.Tesseract)return Promise.resolve();if(tessP)return tessP;
+  tessP=new Promise((ok,bad)=>{const sc=document.createElement("script");sc.src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";sc.onload=ok;sc.onerror=()=>{tessP=null;bad(new Error("load"));};document.head.appendChild(sc);});return tessP;}
+async function prepImage(file){
+  // upscale + grayscale + boost contrast so small app text reads cleanly (dark or light mode)
+  const url=URL.createObjectURL(file);const img=await new Promise((ok,bad)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=bad;i.src=url;});
+  const sc=img.width<1400?2:1,cv=document.createElement("canvas");cv.width=img.width*sc;cv.height=img.height*sc;const x=cv.getContext("2d");x.drawImage(img,0,0,cv.width,cv.height);URL.revokeObjectURL(url);
+  const d=x.getImageData(0,0,cv.width,cv.height),a=d.data;let sum=0;for(let k=0;k<a.length;k+=4)sum+=a[k]*.3+a[k+1]*.59+a[k+2]*.11;const dark=sum/(a.length/4)<110;
+  for(let k=0;k<a.length;k+=4){let g=a[k]*.3+a[k+1]*.59+a[k+2]*.11;if(dark)g=255-g;g=255*Math.pow(g/255,2.2);a[k]=a[k+1]=a[k+2]=g;}
+  x.putImageData(d,0,0);return cv;
+}
+const STAT_ALIAS=(()=>{const m=new Map();Object.entries(STATS).forEach(([sp,list])=>list.forEach(st=>{[st[0],...(st[1]||[])].forEach(a=>{const k=String(a).toLowerCase().replace(/[^a-z0-9+]/g,"");if(k.length>=3&&!m.has(k))m.set(k,st[0]);});}));
+  [["pts","Points"],["rebs","Rebounds"],["asts","Assists"],["3ptmade","3-PT Made"],["ptsrebsasts","Pts+Rebs+Asts"],["ptsrebs","Pts+Rebs"],["ptsasts","Pts+Asts"],["rebsasts","Rebs+Asts"],["blksstls","Blks+Stls"],["passyards","Pass Yards"],["rushyards","Rush Yards"],["receivingyards","Receiving Yards"],["recyards","Receiving Yards"],["rushrecyds","Rush+Rec Yds"],["passtds","Pass TDs"],["fantasyscore","Fantasy Score"]].forEach(([k,v])=>m.set(k,v));return m;})();
+function statFromText(t){const k=t.toLowerCase().replace(/[^a-z0-9+]/g,"");if(!k)return null;if(STAT_ALIAS.has(k))return STAT_ALIAS.get(k);
+  let best=null;for(const [a,v] of STAT_ALIAS){if(a.length>=5&&k.includes(a)&&(!best||a.length>best[0].length))best=[a,v];}return best?best[1]:null;}
+function nameInText(t){
+  const w=normName(t).split(" ").filter(Boolean);
+  for(let n=4;n>=2;n--)for(let i=0;i+n<=w.length;i++){const k=w.slice(i,i+n).join(" ");for(const sp of loadedSports()){const pi=D[sp].names.get(k);if(pi!==undefined)return {name:D[sp].players[pi][0],sport:sp};}}
+  return null;
+}
+function columnText(data,W){
+  // split each OCR line where there's a big gap, then read the screen column by column (PrizePicks shows cards side by side)
+  const segs=[];
+  (data.lines||[]).forEach(l=>{const ws=(l.words||[]).filter(w=>w.text&&w.text.trim());if(!ws.length)return;
+    const h=Math.max(8,...ws.map(w=>w.bbox.y1-w.bbox.y0));let cur=[ws[0]];
+    for(let i=1;i<ws.length;i++){if(ws[i].bbox.x0-ws[i-1].bbox.x1>h*2.2){segs.push(cur);cur=[];}cur.push(ws[i]);}segs.push(cur);});
+  if(!segs.length)return data.text||"";
+  const S=segs.map(ws=>({t:ws.map(w=>w.text).join(" "),x:(ws[0].bbox.x0+ws[ws.length-1].bbox.x1)/2,y:ws[0].bbox.y0}));
+  // column count = most common number of segments per row band, max 3
+  const per={};(data.lines||[]).forEach(()=>{});
+  let ncol=1;{const rows=new Map();S.forEach(s=>{const k=Math.round(s.y/20);rows.set(k,(rows.get(k)||0)+1);});const cnt={};[...rows.values()].forEach(v=>cnt[v]=(cnt[v]||0)+1);
+    let best=0;for(const v in cnt)if(+v<=3&&cnt[v]>best){best=cnt[v];ncol=+v;}}
+  const colOf=s=>Math.min(ncol-1,Math.floor(s.x/(W/ncol)));
+  return S.sort((a,b)=>colOf(a)-colOf(b)||a.y-b.y).map(s=>s.t).join("\n");
+}
+function parseOcr(text){
+  const L=text.split(/\n+/).map(x=>x.trim()).filter(Boolean),out=[],seen=new Set();let cur=null,opp="";
+  for(let k=0;k<L.length;k++){
+    const ln=L[k];const nm=nameInText(ln);if(nm){cur=nm;opp="";}
+    const om=ln.match(/(?:^|\s)(vs\.?|@)\s*([A-Z]{2,4})\b/);if(om&&cur)opp=(om[1].startsWith("v")?"vs ":"@ ")+om[2];
+    if(!cur)continue;
+    const nums=[...ln.matchAll(/(?<![\d:.\/])(\d{1,3}(?:\.5|\.0)?)(?![\d:%\/])/g)].map(m=>m[1]);
+    for(const n of nums){const v=parseFloat(n);if(!(v>0&&v<600))continue;
+      let st=statFromText(ln.replace(n,""));if(!st&&L[k+1])st=statFromText(L[k+1]);if(!st&&L[k+2]&&!nameInText(L[k+1]||""))st=statFromText(L[k+2]);
+      if(!st)continue;if(!/\.5$/.test(n)&&!/\./.test(n)&&v<3)continue;
+      const key=normName(cur.name)+"|"+st;if(seen.has(key))continue;seen.add(key);
+      out.push({player:cur.name,stat:st,line:String(v),opponent:opp,type:""});break;}
+  }
+  return out;
+}
+async function ocrShots(files){
+  const tag=$("shotName");tag.textContent="Loading the screenshot reader…";
+  try{await loadTess();}catch(e){tag.textContent="Couldn't load the screenshot reader — check your connection and try again";return;}
+  if(!loadedSports().length){tag.textContent="Stats are still loading — try again in a second";return;}
+  for(const sp of ["CBB","WNBA"])if(!D[sp]&&SL&&SL[sp]&&(SL[sp].games||[]).length)await ensureSport(sp);
+  let rows=[];
+  try{
+    const w=await Tesseract.createWorker("eng",1,{logger:m=>{if(m.status==="recognizing text")tag.textContent=`Reading screenshot… ${Math.round(m.progress*100)}%`;}});
+    try{await w.setParameters({tessedit_pageseg_mode:"11"});}catch(e){}
+    for(let i=0;i<files.length;i++){tag.textContent=`Reading screenshot ${i+1} of ${files.length}…`;const cv=await prepImage(files[i]);const r=await w.recognize(cv);const txt=columnText(r.data,cv.width);rows=rows.concat(parseOcr(txt));}
+    await w.terminate();
+  }catch(e){tag.textContent="Couldn't read that image — try a clearer screenshot";return;}
+  const found=rows.length;
+  const seen=new Set((linesRows||[]).map(o=>normName(pickCol(o,["player","name","playername","athlete"])||"")+"|"+(pickCol(o,["stat","prop","market","stattype","category"])||"")));
+  rows=rows.filter(r=>{const k=normName(r.player)+"|"+r.stat;if(seen.has(k))return false;seen.add(k);return true;});
+  if(!rows.length){tag.textContent=found?"Those props are already in your list":"Didn't find any props in that screenshot — make sure names and lines are visible";return;}
+  linesRows=(linesRows||[]).concat(rows);
+  tag.textContent=`Read ${rows.length} prop${rows.length>1?"s":""} — check them below before grading`;$("dropShot").classList.add("ok");
+  $("linesName").textContent=`${linesRows.length} lines ready`;$("runSlate").disabled=!linesRows.length;renderQueue();
+  const q=$("queue").querySelector("details");if(q)q.open=true;
+}
 function renderQueue(){
   const q=$("queue");if(!linesRows||!linesRows.length){q.innerHTML="";return;}
   q.innerHTML=`<details style="margin-top:10px"><summary class="mut" style="font-size:13px">${linesRows.length} lines ready — tap to review or remove</summary>`+linesRows.map((o,k)=>`<div class="pick" style="padding:6px 0"><div class="info" style="font-size:13px"><b>${esc(pickCol(o,["player","name","playername","athlete"]))}</b> · ${esc(pickCol(o,["stat","prop","market","stattype","category","proptype"]))} ${esc(pickCol(o,["line","projection","value","number","linescore"]))} <span class="mut">${esc(pickCol(o,["opponent","opp","vs","matchup"]))}</span></div><button class="x" data-q="${k}">×</button></div>`).join("")+`</details><button class="btn sm ghost" id="clearQ" style="margin-top:6px">Clear all lines</button>`;
   q.querySelectorAll("[data-q]").forEach(b=>b.onclick=()=>{linesRows.splice(+b.dataset.q,1);$("runSlate").disabled=!linesRows.length;$("linesName").textContent=`${linesRows.length} lines ready`;renderQueue();});
-  $("clearQ").onclick=()=>{linesRows=null;$("runSlate").disabled=true;$("linesName").textContent="Player, Stat, Line, Opponent";$("dropLines").classList.remove("ok");$("dropShot").classList.remove("ok");$("shotName").textContent="Let Claude read your PrizePicks board";renderQueue();};
+  $("clearQ").onclick=()=>{linesRows=null;$("runSlate").disabled=true;$("linesName").textContent="CSV/Excel (Player, Stat, Line) or a screenshot";$("dropLines").classList.remove("ok");$("dropShot").classList.remove("ok");$("shotName").textContent="Let Claude read your PrizePicks board";renderQueue();};
 }
 
 /* =================== SLIP GENERATOR =================== */
@@ -2134,13 +2207,13 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   if(b.dataset.v==="haus"){renderHaus();startLiveTracking();}if(b.dataset.v==="track")startLiveTracking();
   if(b.dataset.v==="track")renderTracker();if(b.dataset.v==="board")renderBoard();if(b.dataset.v==="games")renderGames();if(b.dataset.v==="piece")renderPiece();if(b.dataset.v==="favs")renderFavs();window.scrollTo(0,0);
 });
-$("fileLines").onchange=e=>e.target.files[0]&&handleFile(e.target.files[0],"lines");
+$("fileLines").onchange=e=>{const f=[...e.target.files];if(!f.length)return;if(f.every(x=>/^image\//.test(x.type)||/\.(png|jpe?g|heic|webp)$/i.test(x.name)))readShots(f);else handleFile(f[0],"lines");e.target.value="";};
 $("fileInj").onchange=e=>e.target.files[0]&&handleFile(e.target.files[0],"inj");
 $("runSlate").onclick=async()=>{selected.clear();openId=null;
   const need=(linesRows||[]).some(o=>{const sp=(pickCol(o,["sport","league"])||"").toUpperCase();const nm=pickCol(o,["player","name","playername","athlete"]);return /CBB|NCAA|COLLEGE|WNBA/.test(sp)||(nm&&!findPlayer(nm).length);});
   if(need){$("runSlate").disabled=true;$("runSlate").textContent="Loading college & WNBA data…";await Promise.all(["CBB","WNBA"].map(ensureSport));$("runSlate").disabled=false;$("runSlate").textContent="Build my lineup";}
   runSlate();};
-$("fileShot").onchange=e=>e.target.files.length&&readShots([...e.target.files]);
+$("fileShot").onchange=e=>{if(e.target.files.length)readShots([...e.target.files]);e.target.value="";};
 $("shareClose").onclick=()=>$("shareModal").classList.add("hide");
 $("set-dark").onchange=e=>{state.dark=e.target.checked;applyTheme();save();};
 $("set-owner").onchange=e=>{state.owner=e.target.checked;save();renderAll();if(!$("v-haus").classList.contains("hide"))renderHaus();};
