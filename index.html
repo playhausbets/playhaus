@@ -1558,7 +1558,7 @@ function boostsHTML(sp,S,list){
       :`<div class="note">Not enough games without him yet to compare.</div>`}</div>`).join("")+`</div><div class="note">Tap a teammate to open them in the Vault. Fewer than 5 games without = small sample.</div>`;
 }
 /* =================== FAVS TRACK RECORD (backtest, same for every visitor) =================== */
-let FAVREC=null,favRecBusy=false;
+const FAVREC={},favRecBusy={};const REC_DAYS={NBA:30,NFL:10,CBB:15,WNBA:30};
 function favPickFor(S,sp,pi,sn,ctx,rowsBefore,season){
   const st=findStat(sp,sn);if(!st)return null;
   const last=rowsBefore.slice(-10).map(i=>st[2](S.c,i));if(last.length<6)return null;
@@ -1584,7 +1584,7 @@ async function buildFavRecord(sp,nDays,onProgress){
     const d=days[k];const cand=[];
     for(let i=0;i<S.n;i++){if(c.d[i]!==d)continue;const pi=c.p[i];
       const before=S.by[pi].filter(j=>c.d[j]<d);if(before.length<6)continue;
-      if(S.bb&&mean(before.slice(-8).map(j=>c.min[j]))<24)continue;
+      if(S.bb&&mean(before.slice(-8).map(j=>c.min[j]))<(sp==="CBB"?28:24))continue;
       const season=c.s[i];
       const ctx={outSet:new Set(),opp:c.o[i],home:c.h[i],bt:{cutoff:d,season},gameDay:d};
       (S.bb?FAV_STATS.bb:(FAV_STATS[S.pg[pi]]||FAV_STATS.WR)).forEach(sn=>{const f=favPickFor(S,sp,pi,sn,ctx,before,season);if(!f)return;
@@ -1605,27 +1605,38 @@ function recSummary(rec){
   const mult=state.payouts[3]||5,stake=5,profit=sw*stake*mult-slips.length*stake;
   return {w,l:all.length-w,ow:ov.filter(x=>x.hit).length,on:ov.length,uw:un.filter(x=>x.hit).length,un:un.length,sw,sn:slips.length,profit,mult};
 }
+function recSports(){const av=SPORTS.filter(sp=>SL&&SL[sp]&&(SL[sp].games||[]).some(g=>g.date>=etToday()));return favSport==="ALL"?av:[favSport];}
 function favRecordHTML(){
-  if(!FAVREC)return `<div class="card" id="favRecCard"><b>📊 Favs track record</b><div class="note">Replays the bot's Favs on the last 30 NBA game days and grades every pick against what actually happened.</div><div id="favRecProg" class="note"></div></div>`;
-  const r=recSummary(FAVREC.rec);const pctW=(a,b)=>b?Math.round(a/b*100)+"%":"—";
-  const fmtD=d=>{const t=new Date(Date.UTC(2022,0,1)+d*864e5);return (t.getUTCMonth()+1)+"/"+t.getUTCDate();};
-  return `<div class="card" id="favRecCard"><b>📊 Favs track record</b> <span class="mut" style="font-size:12px">NBA · last ${FAVREC.rec.length} game days</span>
+  const sps=recSports(),ready=sps.filter(sp=>FAVREC[sp]);
+  if(!sps.length)return "";
+  if(ready.length<sps.length)return `<div class="card" id="favRecCard"><b>📊 Favs track record</b><div class="note">Replaying the bot's Favs on recent ${sps.join(" + ")} games and grading every pick against what actually happened…</div><div id="favRecProg" class="note"></div></div>`;
+  const rec=sps.flatMap(sp=>FAVREC[sp].map(x=>({...x,sp})));
+  const r=recSummary(rec);const pctW=(a,b)=>b?Math.round(a/b*100)+"%":"—";
+  const fmtD=(d,sp)=>{if(sp==="NFL")return "NFL '"+String(Math.floor(d/100)).slice(2)+" Wk "+(d%100);const t=new Date(Date.UTC(2022,0,1)+d*864e5);return (sps.length>1?sp+" ":"")+(t.getUTCMonth()+1)+"/"+t.getUTCDate()+"/"+String(t.getUTCFullYear()).slice(2);};
+  const span=sps.map(sp=>`${sp} · last ${FAVREC[sp].length} ${sp==="NFL"?"weeks":"game days"}`).join(" · ");
+  const sorted=rec.slice().sort((a,b)=>(a.sp===b.sp?b.d-a.d:sps.indexOf(a.sp)-sps.indexOf(b.sp)));
+  if(!rec.length)return `<div class="card" id="favRecCard"><b>📊 Favs track record</b><div class="note">Not enough recent ${sps.join(" + ")} games to build a record yet.</div></div>`;
+  return `<div class="card" id="favRecCard"><b>📊 Favs track record</b> <span class="mut" style="font-size:12px">${span}</span>
     <div class="stats" style="margin-top:8px"><div class="stat"><b>${r.w}–${r.l}</b><span>Picks (${pctW(r.w,r.w+r.l)}) vs est. lines</span></div><div class="stat"><b>${pctW(r.ow,r.on)}</b><span>Overs hit</span></div><div class="stat"><b>${pctW(r.uw,r.un)}</b><span>Unders hit</span></div></div>
-    <div class="stats"><div class="stat"><b>${r.sw}/${r.sn}</b><span>3-pick fav slip hit</span></div><div class="stat"><b class="${r.profit>=0?"more":"less"}">${r.profit>=0?"+":"−"}$${Math.abs(r.profit).toFixed(0)}</b><span>$5 slip daily @ ${r.mult}x</span></div>${(()=>{const be=breakeven(3,r.mult);const ok=r.w+r.l&&r.w/(r.w+r.l)>=be;return `<div class="stat"><b>${ok?"✅ ":""}${(be*100).toFixed(1)}%</b><span>Break-even per pick (3-pick)</span></div>`;})()}</div>
-    <details style="margin-top:8px"><summary class="mut" style="font-size:13px;cursor:pointer">Day by day</summary>
-      <table style="margin-top:6px"><tr><th>Day</th><th class="r">Picks</th><th class="r">Slip</th></tr>${FAVREC.rec.slice().reverse().map(x=>{const g=x.picks.filter(p=>!p.push),w=g.filter(p=>p.hit).length;return `<tr><td>${fmtD(x.d)}</td><td class="r">${w}–${g.length-w}</td><td class="r ${x.slipHit?"more":"less"}">${x.slip.length===3?(x.slipHit?"✅ Hit":"✗"):"—"}</td></tr>`;}).join("")}</table></details>
+    <div class="stats"><div class="stat"><b>${r.sw}/${r.sn}</b><span>3-pick fav slip hit</span></div><div class="stat"><b class="${r.profit>=0?"more":"less"}">${r.profit>=0?"+":"−"}$${Math.abs(r.profit).toFixed(0)}</b><span>$5 per slip @ ${r.mult}x</span></div>${(()=>{const be=breakeven(3,r.mult);const ok=r.w+r.l&&r.w/(r.w+r.l)>=be;return `<div class="stat"><b>${ok?"✅ ":""}${(be*100).toFixed(1)}%</b><span>Break-even per pick (3-pick)</span></div>`;})()}</div>
+    <details style="margin-top:8px"><summary class="mut" style="font-size:13px;cursor:pointer">${sps.length===1&&sps[0]==="NFL"?"Week by week":"Day by day"}</summary>
+      <table style="margin-top:6px"><tr><th>${sps.includes("NFL")&&sps.length===1?"Week":"Day"}</th><th class="r">Picks</th><th class="r">Slip</th></tr>${sorted.map(x=>{const g=x.picks.filter(p=>!p.push),w=g.filter(p=>p.hit).length;return `<tr><td>${fmtD(x.d,x.sp)}</td><td class="r">${w}–${g.length-w}</td><td class="r ${x.slipHit?"more":"less"}">${x.slip.length===3?(x.slipHit?"✅ Hit":"✗"):"—"}</td></tr>`;}).join("")}</table></details>
     <div class="note">Backtest: every pick is made using only stats from before that day, with the same estimated lines Favs uses today. Real PrizePicks lines are sharper, so expect a lower hit rate against them. Injuries from those days aren't included. Past results don't guarantee future ones.</div></div>`;
 }
 async function ensureFavRecord(){
-  if(FAVREC||favRecBusy||!D.NBA)return;
-  const key="ph_favrec_v1_"+D.NBA.maxD;
-  const swap=()=>{const card=$("favRecCard");if(card){const t=document.createElement("div");t.innerHTML=favRecordHTML();card.replaceWith(t.firstElementChild);}};
-  try{const c=localStorage.getItem(key);if(c){FAVREC={rec:JSON.parse(c)};swap();return;}}catch(e){}
-  favRecBusy=true;
-  const rec=await buildFavRecord("NBA",30,(k,n)=>{const el=$("favRecProg");if(el)el.textContent=`Crunching day ${k} of ${n}…`;});
-  favRecBusy=false;FAVREC={rec:rec||[]};
-  try{Object.keys(localStorage).filter(k=>k.startsWith("ph_favrec_")).forEach(k=>localStorage.removeItem(k));localStorage.setItem(key,JSON.stringify(rec.map(x=>({...x,picks:x.picks.map(p=>({player:p.player,team:p.team,stat:p.stat,line:p.line,side:p.side,hit:p.hit,push:p.push,actual:p.actual}))}))));}catch(e){}
-  swap();
+  const swap=()=>{const card=$("favRecCard");if(card){const t=document.createElement("div");t.innerHTML=favRecordHTML();if(t.firstElementChild)card.replaceWith(t.firstElementChild);}};
+  for(const sp of recSports()){
+    if(FAVREC[sp]||favRecBusy[sp])continue;
+    if(!D[sp])await ensureSport(sp);if(!D[sp])continue;
+    const key="ph_favrec_v2_"+sp+"_"+D[sp].maxD;
+    try{const c=localStorage.getItem(key);if(c){FAVREC[sp]=JSON.parse(c);if(recSports().includes(sp))swap();continue;}}catch(e){}
+    favRecBusy[sp]=true;
+    const rec=await buildFavRecord(sp,REC_DAYS[sp]||20,(k,n)=>{const el=$("favRecProg");if(el)el.textContent=`${sp}: crunching ${sp==="NFL"?"week":"day"} ${k} of ${n}…`;});
+    favRecBusy[sp]=false;
+    FAVREC[sp]=(rec||[]).map(x=>({d:x.d,slip:x.slip,slipHit:x.slipHit,picks:x.picks.map(p=>({player:p.player,team:p.team,stat:p.stat,line:p.line,side:p.side,hit:p.hit,push:p.push,actual:p.actual}))}));
+    try{Object.keys(localStorage).filter(k=>k.startsWith("ph_favrec_")&&k.includes("_"+sp+"_")||k.startsWith("ph_favrec_v1")).forEach(k=>localStorage.removeItem(k));localStorage.setItem(key,JSON.stringify(FAVREC[sp]));}catch(e){}
+    if(recSports().includes(sp))swap();
+  }
 }
 /* =================== BACKUP / RESTORE =================== */
 async function backupNow(){
