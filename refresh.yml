@@ -1,0 +1,57 @@
+name: Daily stats refresh + deploy
+
+on:
+  schedule:
+    - cron: "53 11 * * *"   # ~6:53 AM Eastern: stats, schedule, injuries
+    - cron: "7 22 * * *"    # ~5:07 PM Eastern: grabs lines and injury news posted during the day
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas pyarrow numpy
+      - name: Get the saved line history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download data -p lines_hist.json --clobber || echo "no line history yet"
+      - name: Build fresh stats, schedule and injuries
+        env:
+          PB_WORK: ${{ runner.temp }}/work
+        run: python build_data.py .
+      - run: test $(stat -c%s data.json) -gt 2000000
+      - name: Upload data files to the "data" release (read by the Claude refresh task)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view data >/dev/null 2>&1 || gh release create data --title "Latest data" --notes "Rebuilt every morning by the refresh workflow."
+          gh release upload data $(ls data.json slate.json data_cbb.json data_wnba.json lines_hist.json 2>/dev/null) --clobber
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
