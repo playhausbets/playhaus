@@ -1517,10 +1517,11 @@ const FAV_STATS={bb:["Points","Rebounds","Assists","3-PT Made","Pts+Rebs+Asts"],
 function favsFor(sp){
   const key=sp+"|"+etToday()+"|"+((state.slate&&state.slate.props)||[]).length;if(FAVC[key])return FAVC[key];
   const S=D[sp];if(!S)return [];
-  const uploaded=((state.slate&&state.slate.props)||[]).filter(p=>p.sport===sp&&p.grade!=="Pass"&&!p.special);
+  // Favs always scan the whole slate. If you uploaded today's PrizePicks lines, those exact lines replace the estimates for those players.
+  const sl=state.slate,slToday=sl&&sl.date&&new Date(new Date(sl.date).toLocaleString("en-US",{timeZone:"America/New_York"})).toDateString()===new Date(new Date().toLocaleString("en-US",{timeZone:"America/New_York"})).toDateString();
+  const realLine=new Map();if(slToday)(sl.props||[]).forEach(p=>{if(p.sport===sp&&!p.special)realLine.set(normName(p.player)+"|"+p.stat,p.line);});
   const cand=[];
-  if(uploaded.length){uploaded.forEach(p=>cand.push({...p,real:true}));}
-  else{
+  {
     const qs=qSetFor(sp);
     let rows=boardFor(sp).filter(r=>!r.q&&!qs.has(r.pi)&&(!S.bb||(r.minS>=24||(isNaN(r.minS)&&r.min>=24))));
     rows=rows.sort((a,b)=>(b.stats[b.head]?.proj||0)-(a.stats[a.head]?.proj||0)).slice(0,sp==="CBB"?90:160);
@@ -1530,11 +1531,12 @@ function favsFor(sp){
         const st=findStat(sp,sn);if(!st)return;
         const last=S.by[r.pi].slice(-10).map(i=>st[2](S.c,i));if(last.length<6)return;
         const seas=S.by[r.pi].filter(i=>S.c.s[i]===S.cur).map(i=>st[2](S.c,i));const ref=favRef(sn,last,seas);if(!(ref>=(S.bb?1:0.5)))return;
-        const line=Math.round(ref-0.5)+0.5;if(line<(FAV_MIN[sn]||0))return;
+        const rl=realLine.get(normName(r.player)+"|"+sn),real=rl!=null;
+        const line=real?+rl:Math.round(ref-0.5)+0.5;if(!real&&line<(FAV_MIN[sn]||0))return;
         const a=analyzeProp(S,r.pi,st,line,ctx);if(a.err||a.grade==="Pass")return;
         const hits=last.filter(v=>a.side==="More"?v>line:v<line).length;
         if(hits<5)return;
-        cand.push({id:"fav-"+sp+"-"+r.pi+"-"+sn,sport:sp,player:r.player,team:r.team,opp:r.opp,home:r.home,when:r.when,stat:sn,line,side:a.side,conf:a.conf,grade:a.grade,proj:a.proj,hits,n:last.length,
+        cand.push({id:"fav-"+sp+"-"+r.pi+"-"+sn,sport:sp,player:r.player,team:r.team,opp:r.opp,home:r.home,when:r.when,stat:sn,line,real,side:a.side,conf:a.conf,grade:a.grade,proj:a.proj,hits,n:last.length,
           afterD:S.maxD,gameKey:ng?ng.gameKey:null,score:a.conf+0.01*hits});
       });
     });
@@ -1578,9 +1580,9 @@ async function renderFavs(){
     <div class="stats" style="margin-top:8px"><div class="stat"><b>${pct(sl.all)}</b><span>All hit (est.)</span></div><div class="stat"><b>${sl.mult?sl.mult+"x":"—"}</b><span>Payout</span></div><div class="stat"><b class="${sl.ev>=0?"more":"less"}">${sl.ev==null?"—":(sl.ev>=0?"+":"")+(sl.ev*100).toFixed(0)+"%"}</b><span>Expected value${real?"":" (est.)"}</span></div></div>
     <div class="row" style="margin-top:10px;align-items:center"><span class="mut" style="font-size:13px;flex:0 0 auto">Entry $</span><input id="favAmt" type="number" inputmode="decimal" min="0" step="0.5" value="${state.lastStake||5}" style="width:80px;flex:0 0 auto;margin:0"><button class="btn sm ghost" style="flex:1" id="favLog">Log slip</button></div><div class="row" style="margin-top:6px"><button class="btn sm ghost" style="flex:1" id="favShare">📤 Share</button><button class="btn sm ghost" style="flex:1" id="favStar">⭐ Star all</button>${state.owner?`<button class="btn sm ghost" style="flex:1" id="favHaus">📣 Haus</button>`:""}</div>
     ${sl.ev!=null&&sl.ev<0?`<div class="note warn">⚠ Even the best plays today don't quite beat the ${sl.picks.length}-pick payout — consider a smaller slip or sitting this one out.</div>`:""}</div>`;}
-  html+=`<div class="card"><b>⭐ Top 10 plays</b> <span class="mut" style="font-size:12px">5 overs · 5 unders</span><div class="note">${real?"Using the lines you uploaded on the Picks tab.":"Lines are estimated from each player's last 10 games (the line PrizePicks usually sits near). Check your app — if its line is different, tap a player to re-check it in the Vault."}</div>
+  html+=`<div class="card"><b>⭐ Top 10 plays</b> <span class="mut" style="font-size:12px">5 overs · 5 unders</span><div class="note">${real?"Picks marked ✓ use the exact PrizePicks line you uploaded today; the rest are estimated from each player's recent games.":"Lines are estimated from each player's last 10 games (the line PrizePicks usually sits near). Check your app — if its line is different, tap a player to re-check it in the Vault."}</div>
     ${[["More","▲ Favorite overs"],["Less","▼ Favorite unders"]].map(([sd,ttl])=>{const g=list.filter(x=>(x.side==="More")===(sd==="More"));return g.length?`<div style="font-weight:800;margin-top:10px">${ttl}</div>`+g.map((x,k)=>`<div class="pick" style="padding:9px 0" data-lab="${x.sport}|${esc(x.player)}|${esc(x.stat)}">${avatar(x.sport,x.player,x.team,36)}<div class="info"><div class="nm">${esc(x.player)} <span class="tag">${x.sport} ${esc(x.team)}${x.opp?` ${x.home?"vs":"@"} ${esc(x.opp)}`:""}</span></div>
-      <div style="font-size:13px"><b class="${x.side==="More"?"more":"less"}">${x.side==="More"?"▲ Over":"▼ Under"} ${x.line}</b> ${esc(x.stat)}${x.proj!=null?` <span class="mut">· proj ${x.proj.toFixed(1)}</span>`:""}</div>
+      <div style="font-size:13px"><b class="${x.side==="More"?"more":"less"}">${x.side==="More"?"▲ Over":"▼ Under"} ${x.line}</b> ${esc(x.stat)}${x.real?' <span class="tag" title="Your uploaded line">✓ your line</span>':""}${x.proj!=null?` <span class="mut">· proj ${x.proj.toFixed(1)}</span>`:""}</div>
       ${x.hits!=null?`<div class="mut" style="font-size:11px">Hit ${x.hits} of last ${x.n}${x.when?" · "+esc(x.when):""}</div>`:""}</div><span class="grade g${x.grade[0]}">${pct(x.conf)}</span>${starBtn(x.sport,x.player)}</div>`).join(""):"";}).join("")}
     <div class="note">Confidence = the bot's chance the play hits, after matchup, injuries, rest and recent form. A research tool, not a guarantee.</div></div>`;
   html+=favRecordHTML();
