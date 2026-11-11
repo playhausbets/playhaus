@@ -267,6 +267,40 @@ def nfl():
              "through": f"{d.key.max() // 100} week {d.key.max() % 100}", "n": len(d)},
             {"games": games, "injuries": inj})
 
+def lines_history():
+    """Keep a running file of every posted spread/total (and NFL final scores) so the site can grade its team picks."""
+    path = f"{OUT}/lines_hist.json"
+    try: H = json.load(open(path))
+    except Exception: H = {}
+    keep_from = str(TODAY - dt.timedelta(days=400))
+    for k, cfg in BB.items():
+        old = {f'{x["date"]}|{x["h"]}|{x["a"]}': x for x in H.get(k, []) if x.get("date", "") >= keep_from}
+        days = [TODAY - dt.timedelta(days=i) for i in range(14, -2, -1)]   # last 2 weeks (closing lines) + today/tomorrow
+        try: got = espn_lines(cfg["espn"], days, cfg.get("extra", ""))
+        except Exception as e: print(k, "line history skipped:", e); got = {}
+        for (d, h, a), v in got.items():
+            if v.get("spread") is None and v.get("total") is None: continue
+            key = f"{d}|{h}|{a}"; x = old.get(key, {"date": d, "h": h, "a": a})
+            for src, dst in (("spread", "sp"), ("total", "tot"), ("ml_home", "mlh"), ("ml_away", "mla")):
+                if v.get(src) is not None: x[dst] = v[src]
+            old[key] = x
+        H[k] = sorted(old.values(), key=lambda x: (x["date"], x["h"]))
+    gm = pd.read_csv(f"{NFLD_REPO}/data/games.csv")
+    gm["home_team"] = gm.home_team.replace(NFL_ALIAS); gm["away_team"] = gm.away_team.replace(NFL_ALIAS)
+    nf = []
+    for r in gm[(gm.season >= NFL_SEASON - 1)].itertuples():
+        x = {"key": int(r.season) * 100 + int(r.week), "date": str(r.gameday), "h": r.home_team, "a": r.away_team}
+        if not pd.isna(r.spread_line): x["sp"] = -float(r.spread_line)
+        if not pd.isna(r.total_line): x["tot"] = float(r.total_line)
+        if not pd.isna(r.home_moneyline): x["mlh"] = int(r.home_moneyline)
+        if not pd.isna(r.away_moneyline): x["mla"] = int(r.away_moneyline)
+        if not pd.isna(r.home_score): x["hs"] = int(r.home_score); x["as"] = int(r.away_score)
+        nf.append(x)
+    H["NFL"] = nf
+    H["updated"] = str(TODAY)
+    json.dump(H, open(path, "w"), separators=(",", ":"))
+    print("lines_hist.json", os.path.getsize(path) // 1024, "KB |", {k: len(v) for k, v in H.items() if isinstance(v, list)})
+
 def pack(block, nba_dates=False):
     out = {}
     for k, v in block["cols"].items():
@@ -293,6 +327,8 @@ if __name__ == "__main__":
         slate[k] = sl
         print(f"data_{k.lower()}.json", os.path.getsize(f"{OUT}/data_{k.lower()}.json") // 1024, "KB |", k, blk["n"], "rows thru", blk["through"])
     json.dump(slate, open(f"{OUT}/slate.json", "w"), separators=(",", ":"))
+    try: lines_history()
+    except Exception as e: print("line history skipped:", type(e).__name__, e)
     print("data.json", os.path.getsize(f"{OUT}/data.json") // 1024, "KB | NBA", nb["n"], "rows thru", nb["through"],
           "| NFL", nf["n"], "rows thru", nf["through"], "| upcoming NBA", len(nbs["games"]), "NFL", len(nfs["games"]),
           "| auto injuries NBA", len(nbs["injuries"]), "NFL", len(nfs["injuries"]))

@@ -100,6 +100,7 @@ html.dark .bannerwrap img{border-radius:14px}
 }
 @media (min-width:1400px){#slateOut,#v-set{column-count:3}}
 .sc{font-size:24px;font-weight:900;min-width:40px;text-align:center;color:var(--txt);font-variant-numeric:tabular-nums}.sc.win{color:var(--acc,#7A1F2B)}.sc.lose{opacity:.55}
+.tq{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}.tq:last-child{border-bottom:0}.tq>span{font-size:20px;line-height:1.2}.tq .mut{font-size:12px}[data-tq]{cursor:pointer}
 .lu{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px}.lu .p{font-size:12px;padding:3px 0;border-bottom:1px dashed var(--line);display:flex;justify-content:space-between;gap:6px}.lu .p span{white-space:nowrap}
 .bv{opacity:0;pointer-events:none}.bg:hover .bv,.bg.on .bv{opacity:1}.bg{cursor:pointer}.bg:hover rect,.bg.on rect{opacity:1}
 .live{color:#B42318;animation:blink 1.4s infinite}@keyframes blink{50%{opacity:.35}}
@@ -324,7 +325,7 @@ function merge(d){if(!d||typeof d!=="object")return;
   state.entries=Array.isArray(d.entries)?d.entries:[];
   state.payouts=Object.assign({...DEF_POWER},d.payouts||{});
   state.flex=Object.assign(JSON.parse(JSON.stringify(DEF_FLEX)),d.flex||{});
-  state.slate=d.slate||null;state.bank=d.bank||{};state.watch=d.watch||[];state.hausDraft=d.hausDraft||[];state.owner=!!d.owner;state.dark=!!d.dark;state.stars=d.stars||[];state.slipOpts=d.slipOpts;state.boardStat=d.boardStat;state.lastStake=d.lastStake;}
+  state.slate=d.slate||null;state.bank=d.bank||{};state.watch=d.watch||[];state.hausDraft=d.hausDraft||[];state.owner=!!d.owner;state.dark=!!d.dark;state.stars=d.stars||[];state.slipOpts=d.slipOpts;state.boardStat=d.boardStat;state.teamLines=d.teamLines||{};state.finals=d.finals||{};state.lastStake=d.lastStake;}
 let dbDoc=null,writing=false,pending=false;
 function save(){
   try{localStorage.setItem("pickbot",JSON.stringify(state));}catch(e){}
@@ -535,7 +536,7 @@ function restTable(S,st){
 /* user-specific tuning learned from graded picks */
 let TUNE={k:1,n:0,stat:{}};
 function computeTune(){
-  const picks=state.entries.flatMap(e=>e.picks).filter(p=>(p.result==="hit"||p.result==="miss")&&p.conf);
+  const picks=state.entries.flatMap(e=>e.picks).filter(p=>p.kind!=="team"&&(p.result==="hit"||p.result==="miss")&&p.conf);
   const t={k:1,n:picks.length,stat:{},pred:null,act:null};
   if(picks.length>=30){
     const m=mean(picks.map(p=>p.conf)),a=picks.filter(p=>p.result==="hit").length/picks.length;
@@ -636,12 +637,19 @@ function analyzeProp(S,pi,st,line,ctx){
       if(Math.abs(delta)>=0.05){adj.push(["Teammates out",delta/proj*100]);proj+=delta;inj={delta,how,mates:mates.map(q=>S.players[q][0])};}
     }
   }
+  // calibration: backtests show raw projections run a few % hot (recent hot streaks regress), most of all for NFL yardage
+  {const K=S.bb?{_:0.965}:{"Rush Yards":0.94,"Rush+Rec Yds":0.955,"Receiving Yards":0.965,"Receptions":0.98,"Pass Yards":0.99,"Targets":0.98,_:0.975};const k=K[st[0]]??K._;proj*=k;}
   // spread of outcomes
   const recent=vals.slice(-25);const m=mean(recent);
   let sd=recent.length>1?Math.sqrt(recent.reduce((s,x)=>s+(x-m)**2,0)/(recent.length-1)):proj*0.3;
   sd=Math.max(sd,proj*0.15,0.8);
   const count=st[3]&&line<=4.5;
-  const pModel=count?poisOver(proj,line):1-ncdf((line-proj)/sd);
+  // skew-aware: blend the bell curve with the player's own game-to-game shape (yardage is lopsided — a few big games pull the average above the typical game)
+  let pModel;
+  if(count)pModel=poisOver(proj,line);
+  else{const pN=1-ncdf((line-proj)/sd);const sc=m>0?proj/m:1;const rv=recent.map(v=>v*sc);
+    const pE=rv.length>=6?(rv.filter(v=>v>line).length+0.5*rv.filter(v=>v===line).length+1)/(rv.length+2):pN;
+    const wE=S.bb?0.4:0.65;pModel=(1-wE)*pN+wE*pE;}
   const hr=a=>{const o=a.filter(v=>v>line).length,u=a.filter(v=>v<line).length;return o+u?o/(o+u):null;};
   const h10=hr(l10),hCur=hr(cur),hPrev=hr(prev);
   const hH=h2h&&!ctx.h2hOld&&h2h.over+h2h.under>=3?h2h.over/(h2h.over+h2h.under):null;
@@ -1102,9 +1110,15 @@ function renderGames(fromLive){
   const games=all.filter(g=>g.date===gamesDate);
   const boardList=D[sp]?boardFor(sp):[];
   const props=(state.slate&&state.slate.props)||[];
-  let html=`<div class="seg" id="gSport">${SPORTS.filter(x=>SL[x]).map(x=>`<button data-s="${x}" class="${sp===x?"on":""}">${SPORT_LABEL[x]}</button>`).join("")}</div>
+  let html=`<div class="seg" id="gMode" style="margin-bottom:8px"><button data-gm="sched" class="${gamesMode==="sched"?"on":""}">📅 Schedule & scores</button><button data-gm="team" class="${gamesMode==="team"?"on":""}">🎯 Team picks</button></div><div class="seg" id="gSport">${SPORTS.filter(x=>SL[x]).map(x=>`<button data-s="${x}" class="${sp===x?"on":""}">${SPORT_LABEL[x]}</button>`).join("")}</div>
     <div class="chips" id="gDays">${dates.map(d=>`<button data-d="${d}" class="${d===gamesDate?"on":""}">${fmtDay(d)}</button>`).join("")}</div>`;
+  if(gamesMode==="sched"&&gamesDate===etToday())html=todayCardHTML()+html;
   if(!games.length)html+=`<div class="card empty">No ${sp} games scheduled in the next few days.</div>`;
+  if(gamesMode==="team"&&games.length){html+=renderTeamPicks(el,sp,games);el.innerHTML=html;
+    el.querySelectorAll("#gMode button").forEach(b=>b.onclick=()=>{gamesMode=b.dataset.gm;renderGames();});
+    el.querySelectorAll("#gSport button").forEach(b=>b.onclick=()=>{gamesSport=b.dataset.s;gamesDate=null;gameOpen=null;if(!D[gamesSport])ensureSport(gamesSport).then(()=>renderGames());renderGames();});
+    el.querySelectorAll("#gDays button").forEach(b=>b.onclick=()=>{gamesDate=b.dataset.d;renderGames();});
+    wireTeamPicks(el,sp,games);if(!fromLive)startLive();if(!LHIST)loadHist().then(()=>{if(gamesMode==="team")renderGames(true);});return;}
   html+=`<div class="ggrid">`+games.map((g,gi)=>{
     const hasLines=g.total!=null||g.spread!=null||g.ml_home!=null;
     const lv=liveFor(sp,g),showScore=lv&&(lv.state==="in"||lv.state==="post");
@@ -1125,6 +1139,8 @@ function renderGames(fromLive){
   html+=`</div>`;
   html+=`<div class="note">Times are Eastern. Spread and ML (moneyline) are each team's; O/U is the game total. ${isBB(sp)?sp+" lines fill in each morning when available.":"NFL lines come from the schedule feed."}</div>`;
   el.innerHTML=html;
+  el.querySelectorAll("#gMode button").forEach(b=>b.onclick=()=>{gamesMode=b.dataset.gm;renderGames();});
+  el.querySelectorAll("[data-tq]").forEach(x=>x.onclick=()=>{const t=x.dataset.tq;if(t==="favs")document.querySelector('nav button[data-v="favs"]').click();else if(t==="team"){gamesMode="team";gamesSport=x.dataset.tqs;gamesDate=etToday();renderGames();window.scrollTo(0,0);}else if(t==="look")openLab(x.dataset.tqp,"Points");});
   el.querySelectorAll("#gSport button").forEach(b=>b.onclick=()=>{gamesSport=b.dataset.s;gamesDate=null;gameOpen=null;if(!D[gamesSport])ensureSport(gamesSport).then(()=>renderGames());renderGames();});
   el.querySelectorAll("#gDays button").forEach(b=>b.onclick=()=>{gamesDate=b.dataset.d;gameOpen=null;renderGames();});
   el.querySelectorAll("[data-g]").forEach(c=>c.onclick=e=>{if(e.target.closest("[data-lab],[data-star]"))return;gameOpen=gameOpen===+c.dataset.g?null:+c.dataset.g;renderGames();});
@@ -1146,6 +1162,12 @@ async function fetchLive(sport,date){
       (c.competitors||[]).forEach(x=>{const ab=fx[x.team&&x.team.abbreviation]||(x.team&&x.team.abbreviation);t[x.homeAway]={ab,score:x.score};});
       if(!t.home||!t.away)return;const st=((ev.status||c.status||{}).type)||{};
       const v={id:ev.id,state:st.state||"",detail:st.shortDetail||st.detail||"",hs:t.home.score,as:t.away.score};
+      // pick up lines posted after the morning data build
+      try{const od=(c.odds||[])[0];if(od&&SL&&SL[sport]){const g=(SL[sport].games||[]).find(x=>x.home===t.home.ab&&x.away===t.away.ab&&x.date===date);
+        if(g){if(g.total==null&&od.overUnder!=null)g.total=+od.overUnder;
+          if(g.spread==null){const m=String(od.details||"").match(/^([A-Z]{2,4})\s+([-+]?\d+(?:\.\d+)?)/);if(m){const ab=fx[m[1]]||m[1];g.spread=ab===t.home.ab?+m[2]:-m[2];}else if(/^even/i.test(String(od.details||"")))g.spread=0;}
+          const ml=x=>{const n=parseFloat(String(x??"").replace(/[^\d.+\-]/g,""));return isNaN(n)?null:n;};
+          if(g.ml_home==null){g.ml_home=ml((od.homeTeamOdds||{}).moneyLine);g.ml_away=ml((od.awayTeamOdds||{}).moneyLine);}}}}catch(e){}
       const k=t.home.ab+"|"+t.away.ab;if(JSON.stringify(LIVE[sport][k])!==JSON.stringify(v)){LIVE[sport][k]=v;changed=true;}});
     liveAt[sport+date]=Date.now();return changed;
   }catch(e){liveAt[sport+date]=Date.now();return false;}
@@ -1222,8 +1244,8 @@ function liveValue(sport,statName,o){const st=findStat(sport,statName);if(!st||!
 let LIVEPICKS=[];
 async function trackLive(){
   const today=etToday();const pend=[];
-  state.entries.forEach(e=>e.picks.forEach(p=>{if(!p.result)pend.push({e,p});}));
-  ((HAUS&&HAUS.slips)||[]).forEach(sl=>sl.picks.forEach(p=>{if(!gradePick(p))pend.push({haus:sl,p});}));
+  state.entries.forEach(e=>e.picks.forEach(p=>{if(!p.result&&p.kind!=="team")pend.push({e,p});}));
+  ((HAUS&&HAUS.slips)||[]).forEach(sl=>sl.picks.forEach(p=>{if(p.kind!=="team"&&!gradePick(p))pend.push({haus:sl,p});}));
   if(!pend.length){LIVEPICKS=[];return;}
   const bySport={};pend.forEach(x=>{(bySport[x.p.sport]=bySport[x.p.sport]||[]).push(x);});
   const res=[];
@@ -1262,6 +1284,7 @@ function startLiveTracking(){if(!liveTrackTimer)liveTrackTimer=setInterval(()=>{
 
 /* =================== GRADING (shared) =================== */
 function gradePick(p){
+  if(p.kind==="team")return gradeTeamPick(p);
   const S=D[p.sport];if(!S)return null;const m=findPlayer(p.player,p.sport);if(!m.length)return null;const st=findStat(p.sport,p.stat);if(!st)return null;
   const rows=S.by[m[0].i];let i;
   if(p.gameKey!=null){i=rows.find(j=>S.c.d[j]===p.gameKey);if(i===undefined)return S.maxD>p.gameKey+(S.bb?1:0)?{result:"push",actual:"DNP"}:null;}
@@ -1271,7 +1294,7 @@ function gradePick(p){
 
 /* =================== HAUS PICKS =================== */
 let HAUS=null;
-const slimPick=p=>({sport:p.sport,player:p.player,team:p.team||"",stat:p.stat,line:p.line,side:p.side,conf:p.conf,grade:p.grade,gameKey:p.gameKey??null,afterD:p.afterD??null});
+const slimPick=p=>p.kind==="team"?{kind:"team",sport:p.sport,market:p.market,player:p.player,stat:p.stat,line:p.line,side:p.side,team:p.team,odds:p.odds,conf:p.conf,grade:p.grade,home:p.home,away:p.away,gameKey:p.gameKey,date:p.date}:({sport:p.sport,player:p.player,team:p.team||"",stat:p.stat,line:p.line,side:p.side,conf:p.conf,grade:p.grade,gameKey:p.gameKey??null,afterD:p.afterD??null});
 function addToHaus(picks,meta){
   state.hausDraft=state.hausDraft||[];
   state.hausDraft.push({id:uid(),date:etToday(),type:meta.type||"power",n:picks.length,mult:meta.mult||null,allHit:meta.all??null,title:"",picks:picks.map(slimPick)});
@@ -1297,8 +1320,8 @@ function renderHaus(fromLive){
   const todays=st.filter(x=>x.s.date===today||x.state==="pending");
   const past=st.filter(x=>!todays.includes(x)).slice(0,30);
   const slipCard=x=>{const s=x.s;const badge=x.state==="won"?'<span class="grade gA">WON</span>':x.state==="lost"?'<span class="grade gP">LOST</span>':x.state==="push"?'<span class="grade gC">PUSH</span>':'<span class="grade gB">LIVE / PENDING</span>';
-    return `<div class="card hslip"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div><b>${esc(s.title||((s.n||s.picks.length)+"-pick "+(s.type==="flex"?"Flex":"Power")))}</b><div class="mut" style="font-size:12px">${esc(fmtDay(s.date))}${s.allHit?` · all hit ${pct(s.allHit)}`:""}${s.mult?` · pays ${s.mult}x`:""}</div></div>${badge}</div>
-      ${s.picks.map((p,k)=>{const g=x.g[k];return `<div class="pick" style="padding:7px 0">${avatar(p.sport,p.player,p.team,32)}<div class="info"><div class="nm" style="font-size:14px">${esc(p.player)} <span class="tag">${esc(p.sport)}</span></div><div style="font-size:13px"><b class="${p.side==="More"?"more":"less"}">${p.side}</b> ${p.line} ${esc(p.stat)}</div></div><div style="text-align:right;font-size:12px">${g?(g.result==="hit"?`<b class="more">✓ ${esc(g.actual)}</b>`:g.result==="miss"?`<b class="less">✗ ${esc(g.actual)}</b>`:`<span class="mut">push</span>`):`<span class="mut">${p.conf?pct(p.conf):""}</span>`}</div></div>`;}).join("")}
+    return `<div class="card hslip"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div><b>${esc(s.title||(s.type==="bet"?((s.n||s.picks.length)===1?"🎯 Straight bet":"🎯 "+(s.n||s.picks.length)+"-leg parlay"):(s.n||s.picks.length)+"-pick "+(s.type==="flex"?"Flex":"Power")))}</b><div class="mut" style="font-size:12px">${esc(fmtDay(s.date))}${s.allHit?` · all hit ${pct(s.allHit)}`:""}${s.mult?` · pays ${s.mult}x`:""}</div></div>${badge}</div>
+      ${s.picks.map((p,k)=>{const g=x.g[k];return `<div class="pick" style="padding:7px 0">${avatar(p.sport,p.player,p.team,32)}<div class="info"><div class="nm" style="font-size:14px">${esc(p.player)} <span class="tag">${esc(p.sport)}</span></div><div style="font-size:13px">${p.kind==="team"?`<span class="mut">${esc(p.market)} · ${esc(p.away)} @ ${esc(p.home)}</span>`:`<b class="${p.side==="More"?"more":"less"}">${p.side}</b> ${p.line} ${esc(p.stat)}`}</div></div><div style="text-align:right;font-size:12px">${g?(g.result==="hit"?`<b class="more">✓ ${esc(g.actual)}</b>`:g.result==="miss"?`<b class="less">✗ ${esc(g.actual)}</b>`:`<span class="mut">push</span>`):`<span class="mut">${p.conf?pct(p.conf):""}</span>`}</div></div>`;}).join("")}
       <div class="row" style="margin-top:8px"><button class="btn sm ghost" data-hshare="${esc(s.id)}" style="flex:1">📤 Share</button></div></div>`;};
   let html=`<div class="card hero"><div style="display:flex;justify-content:space-between;align-items:center"><div><b style="font-size:18px">🔥 Haus Picks</b><div class="note" style="margin-top:2px">The picks we're actually playing — graded automatically after every game.</div></div></div>
     <div class="stats"><div class="stat"><b>${done.filter(x=>x.state==="won").length}-${done.filter(x=>x.state==="lost").length}</b><span>Slips W-L</span></div>
@@ -1341,7 +1364,7 @@ async function shareSlip(sl){
   x.fillStyle="#7B1E2B";x.font="bold 64px Georgia, 'Times New Roman', serif";x.textAlign="center";x.fillText("PLAY HAUS",W/2,130);
   x.fillStyle="#2B1D16";x.font="600 40px -apple-system, Helvetica, Arial, sans-serif";x.fillText(sl.title||"My slip",W/2,200);
   x.fillStyle="#7D6757";x.font="30px -apple-system, Helvetica, Arial, sans-serif";
-  x.fillText([sl.sub,(picks.length+"-pick "+(sl.type==="flex"?"Flex":"Power")),sl.mult?("pays "+sl.mult+"x"):""].filter(Boolean).join("  ·  "),W/2,248);
+  x.fillText([sl.sub,(sl.type==="bet"?(picks.length===1?"Straight bet":picks.length+"-leg parlay"):picks.length+"-pick "+(sl.type==="flex"?"Flex":"Power")),sl.mult?("pays "+sl.mult+"x"):""].filter(Boolean).join("  ·  "),W/2,248);
   let y=300;
   picks.forEach(p=>{
     x.fillStyle="#F6ECE2";roundRect(x,60,y,W-120,128,28);x.fill();
@@ -1349,8 +1372,9 @@ async function shareSlip(sl){
     const ini=String(p.player).split(/\s+/).filter(Boolean);x.fillStyle="#fff";x.font="bold 34px -apple-system, Helvetica, Arial, sans-serif";x.textAlign="center";
     x.fillText(((ini[0]||"?")[0]+((ini.length>1?ini[ini.length-1]:"")[0]||"")).toUpperCase(),140,y+76);
     x.textAlign="left";x.fillStyle="#2B1D16";x.font="bold 40px -apple-system, Helvetica, Arial, sans-serif";x.fillText(p.player,210,y+56);
+    if(p.kind==="team"){x.font="32px -apple-system, Helvetica, Arial, sans-serif";x.fillStyle="#7D6757";x.fillText(`${p.market} · ${p.away} @ ${p.home}${p.odds!=null?" · "+(p.odds>0?"+":"")+p.odds:""}`,210,y+104);}else{
     x.font="600 34px -apple-system, Helvetica, Arial, sans-serif";x.fillStyle=p.side==="More"?"#1F7A4C":"#B42318";x.fillText((p.side==="More"?"▲ MORE ":"▼ LESS ")+p.line,210,y+104);
-    const w=x.measureText((p.side==="More"?"▲ MORE ":"▼ LESS ")+p.line).width;x.fillStyle="#7D6757";x.font="32px -apple-system, Helvetica, Arial, sans-serif";x.fillText(" "+p.stat,210+w,y+104);
+    const w=x.measureText((p.side==="More"?"▲ MORE ":"▼ LESS ")+p.line).width;x.fillStyle="#7D6757";x.font="32px -apple-system, Helvetica, Arial, sans-serif";x.fillText(" "+p.stat,210+w,y+104);}
     if(p.conf){x.textAlign="right";x.fillStyle="#7B1E2B";x.font="bold 34px -apple-system, Helvetica, Arial, sans-serif";x.fillText(Math.round(p.conf*100)+"%",W-96,y+76);}
     y+=150;
   });
@@ -1485,6 +1509,8 @@ function lineupHTML(sp,g,lv){
   return `<b style="font-size:13px">${title}</b><div class="lu">${col(g.away,A)}${col(g.home,H)}</div><div class="note">${note}</div>`;
 }
 /* =================== CLAUDE'S FAVS =================== */
+// estimated line: yardage is lopsided, so books set it near the typical game (median), not the average
+const YARDY=/Yards|Yds/;function favRef(sn,last,seas){const f=YARDY.test(sn)?(a=>quant(a,.5)):mean;return seas.length>=3?0.5*f(last)+0.5*f(seas):f(last);}
 let favSport="ALL",favSize=3;const FAVC={};
 const FAV_MIN={"Points":9.5,"Rebounds":3.5,"Assists":2.5,"3-PT Made":1.5,"Pts+Rebs+Asts":15.5,"Pass Yards":149.5,"Pass TDs":1.5,"Rush Yards":24.5,"Receptions":2.5,"Receiving Yards":24.5,"Rush+Rec Yds":39.5};
 const FAV_STATS={bb:["Points","Rebounds","Assists","3-PT Made","Pts+Rebs+Asts"],QB:["Pass Yards","Pass TDs","Rush Yards"],RB:["Rush Yards","Receptions","Rush+Rec Yds"],WR:["Receptions","Receiving Yards"],TE:["Receptions","Receiving Yards"]};
@@ -1503,7 +1529,7 @@ function favsFor(sp){
       (S.bb?FAV_STATS.bb:(FAV_STATS[S.pg[r.pi]]||FAV_STATS.WR)).forEach(sn=>{
         const st=findStat(sp,sn);if(!st)return;
         const last=S.by[r.pi].slice(-10).map(i=>st[2](S.c,i));if(last.length<6)return;
-        const seas=S.by[r.pi].filter(i=>S.c.s[i]===S.cur).map(i=>st[2](S.c,i));const ref=seas.length>=3?0.5*mean(last)+0.5*mean(seas):mean(last);if(!(ref>=(S.bb?1:0.5)))return;
+        const seas=S.by[r.pi].filter(i=>S.c.s[i]===S.cur).map(i=>st[2](S.c,i));const ref=favRef(sn,last,seas);if(!(ref>=(S.bb?1:0.5)))return;
         const line=Math.round(ref-0.5)+0.5;if(line<(FAV_MIN[sn]||0))return;
         const a=analyzeProp(S,r.pi,st,line,ctx);if(a.err||a.grade==="Pass")return;
         const hits=last.filter(v=>a.side==="More"?v>line:v<line).length;
@@ -1646,7 +1672,7 @@ function favPickFor(S,sp,pi,sn,ctx,rowsBefore,season){
   const st=findStat(sp,sn);if(!st)return null;
   const last=rowsBefore.slice(-10).map(i=>st[2](S.c,i));if(last.length<6)return null;
   const seas=rowsBefore.filter(i=>S.c.s[i]===season).map(i=>st[2](S.c,i));
-  const ref=seas.length>=3?0.5*mean(last)+0.5*mean(seas):mean(last);if(!(ref>=(S.bb?1:0.5)))return null;
+  const ref=favRef(sn,last,seas);if(!(ref>=(S.bb?1:0.5)))return null;
   const line=Math.round(ref-0.5)+0.5;if(line<(FAV_MIN[sn]||0))return null;
   const a=analyzeProp(S,pi,st,line,ctx);if(a.err||a.grade==="Pass")return null;
   const hits=last.filter(v=>a.side==="More"?v>line:v<line).length;if(hits<5)return null;
@@ -1711,7 +1737,7 @@ async function ensureFavRecord(){
   for(const sp of recSports()){
     if(FAVREC[sp]||favRecBusy[sp])continue;
     if(!D[sp])await ensureSport(sp);if(!D[sp])continue;
-    const key="ph_favrec_v2_"+sp+"_"+D[sp].maxD;
+    const key="ph_favrec_v3_"+sp+"_"+D[sp].maxD;
     try{const c=localStorage.getItem(key);if(c){FAVREC[sp]=JSON.parse(c);if(recSports().includes(sp))swap();continue;}}catch(e){}
     favRecBusy[sp]=true;
     const rec=await buildFavRecord(sp,REC_DAYS[sp]||20,(k,n)=>{const el=$("favRecProg");if(el)el.textContent=`${sp}: crunching ${sp==="NFL"?"week":"day"} ${k} of ${n}…`;});
@@ -1736,6 +1762,201 @@ function restoreFrom(text){
   merge(st);save();applyTheme&&applyTheme();renderAll();renderSettings();toast(`✅ Restored ${st.entries.length} entries`);
 }
 function confirmRestore(st){const b=$("restoreMsg");if(!b)return true;b.innerHTML=`Restoring replaces what's on this phone with the backup (${st.entries.length} entries, ${(st.stars||[]).length} stars).`;return true;}
+/* =================== TEAM PICKS (spreads, totals, moneylines) =================== */
+let gamesMode="sched";const TEAMR={};let teamSlip=[],tlOpen=null;
+window.TPX=null;const TP={NBA:{hca:2.4,sdM:12.5,sdT:18,k:6,b2b:1.6},CBB:{hca:3.2,sdM:11,sdT:15.5,k:4,b2b:0},WNBA:{hca:1.8,sdM:11,sdT:15,k:5,b2b:1.2},NFL:{hca:1.6,sdM:13.5,sdT:13,k:4,b2b:0}};
+function teamLogs(S){ // per team: games with points for/against (basketball box scores add up to the final score)
+  if(S._tlog)return S._tlog;const c=S.c,pts=new Map(),meta=new Map();
+  for(let i=0;i<S.n;i++){const k=c.t[i]*100000+c.d[i];pts.set(k,(pts.get(k)||0)+c.pts[i]);if(!meta.has(k))meta.set(k,{t:c.t[i],d:c.d[i],s:c.s[i],o:c.o[i],h:c.h[i]});}
+  const logs=S.teams.map(()=>[]);
+  for(const [k,m] of meta){const pa=pts.get(m.o*100000+m.d);if(pa==null)continue;const pf=pts.get(k);if(pf<25||pa<25)continue;logs[m.t].push({...m,pf,pa});}
+  logs.forEach(l=>l.sort((a,b)=>a.d-b.d));S._tlog=logs;return logs;
+}
+function teamFinal(S,home,away,day){const L=teamLogs(S),h=S.teams.indexOf(home);if(h<0)return null;const g=L[h].find(x=>x.d===day);return g?{hs:g.pf,as:g.pa}:null;}
+let LHIST=null,lhP=null;
+function loadHist(){if(LHIST)return Promise.resolve(LHIST);if(lhP)return lhP;lhP=fetch("lines_hist.json",{cache:"no-store"}).then(r=>r.ok?r.json():{}).catch(()=>({})).then(j=>(LHIST=j||{}));return lhP;}
+function abLogs(sp){ // team abbreviation -> games [{d,s,o(abbr),h,pf,pa}]
+  const S=D[sp];if(!S)return null;
+  if(isBB(sp)){if(S._ablog)return S._ablog;const L=teamLogs(S),o={};L.forEach((l,i)=>{o[S.teams[i]]=l.map(g=>({d:g.d,s:g.s,o:S.teams[g.o],h:g.h,pf:g.pf,pa:g.pa}));});return S._ablog=o;}
+  if(!LHIST||!LHIST.NFL)return null;if(S._ablog)return S._ablog;const o={};
+  LHIST.NFL.forEach(x=>{if(x.hs==null||x.as==null)return;const s2=Math.floor(x.key/100);(o[x.h]=o[x.h]||[]).push({d:x.key,s:s2,o:x.a,h:1,pf:x.hs,pa:x.as});(o[x.a]=o[x.a]||[]).push({d:x.key,s:s2,o:x.h,h:0,pf:x.as,pa:x.hs});});
+  for(const t in o)o[t].sort((a,b)=>a.d-b.d);return S._ablog=o;
+}
+function teamRatings(sp,cutoff){
+  const S=D[sp];if(!S)return null;const P=TP[sp],ck=sp+"|"+(cutoff??"now")+"|"+S.maxD+"|"+(sp==="NFL"&&LHIST&&LHIST.NFL?1:0);if(TEAMR[ck])return TEAMR[ck];
+  const all=abLogs(sp);
+  if(!all){ // NFL before the line history loads: season averages
+    const ts=S.teamStats||{},L=(S.leagueTotal||45)/2,R={};for(const t in ts){const x=ts[t],w=x.g/(x.g+P.k);R[t]={off:L+(x.pf-L)*w,def:L+(x.pa-L)*w,n:x.g};}return TEAMR[ck]={R,L};}
+  const logs={};let cur=0;for(const t in all){const l=cutoff==null?all[t]:all[t].filter(g=>g.d<cutoff);logs[t]=l;l.forEach(g=>{if(g.s>cur)cur=g.s;});}
+  const PK=window.__PK??0.35;const W=g=>g.s===cur?1:g.s===cur-1?PK:0;
+  let sw=0,sp_=0;for(const t in logs)logs[t].forEach(g=>{const w=W(g);sw+=w;sp_+=w*g.pf;});if(!sw)return null;const L=sp_/sw;
+  let R={};for(const t in logs){const l=logs[t].filter(g=>W(g)>0);if(!l.length)continue;const curN=l.filter(g=>g.s===cur).length;
+    const wts=l.map((g,k)=>W(g)*(g.s===cur&&k>=l.length-10?1.5:1));const tw=wts.reduce((a,b)=>a+b,0);
+    R[t]={off:l.reduce((a,g,k)=>a+wts[k]*g.pf,0)/tw,def:l.reduce((a,g,k)=>a+wts[k]*g.pa,0)/tw,n:curN,tw,games:l,wts};}
+  for(let it=0;it<2;it++){const N={};for(const t in R){const r=R[t];let so=0,sd=0;r.games.forEach((g,k)=>{const o=R[g.o];so+=r.wts[k]*(g.pf-(o?o.def-L:0));sd+=r.wts[k]*(g.pa-(o?o.off-L:0));});N[t]={...r,off:so/r.tw,def:sd/r.tw};}R=N;}
+  for(const t in R){const r=R[t],sh=r.tw/(r.tw+P.k);r.off=L+(r.off-L)*sh;r.def=L+(r.def-L)*sh;delete r.games;delete r.wts;}
+  return TEAMR[ck]={R,L};
+}
+function projectGame(sp,g,opt){
+  opt=opt||{};const day=g.day??g.key;const TR=teamRatings(sp,opt.cutoff);if(!TR)return null;const P=TP[sp],h=TR.R[g.home],a=TR.R[g.away];if(!h||!a)return null;const L=TR.L;
+  let hs=L+(h.off-L)+(a.def-L)+P.hca/2,as=L+(a.off-L)+(h.def-L)-P.hca/2;const notes=[];
+  if(!opt.noInj){const ih=injuryHit(sp,g.home),ia=injuryHit(sp,g.away);hs-=ih.pts;as-=ia.pts;
+    if(ih.who.length)notes.push(`${g.home} without ${ih.who.join(", ")} (−${ih.pts.toFixed(1)})`);if(ia.who.length)notes.push(`${g.away} without ${ia.who.join(", ")} (−${ia.pts.toFixed(1)})`);}
+  if(P.b2b&&day!=null){const lg=abLogs(sp)||{};[["home",g.home],["away",g.away]].forEach(([side,ab])=>{const l=(lg[ab]||[]).filter(x=>x.d<day);const last=l[l.length-1];if(last&&day-last.d===1){if(side==="home")hs-=P.b2b;else as-=P.b2b;notes.push(`${ab} on a back-to-back (−${P.b2b})`);}});}
+  return {hs,as,margin:hs-as,total:hs+as,notes,n:Math.min(h.n,a.n)};
+}
+function teamRecord(sp){
+  if(!LHIST||!LHIST[sp]||!D[sp])return null;const S=D[sp];const DAYS={NBA:45,CBB:21,WNBA:60,NFL:1300};
+  const rows=[];const lg=abLogs(sp);if(!lg)return null;
+  const hist=LHIST[sp].map(x=>isBB(sp)?{...x,day:dayFromDate(x.date)}:{...x}).filter(x=>x.sp!=null||x.tot!=null);
+  const maxD=isBB(sp)?S.maxD:Math.max(...hist.filter(x=>x.hs!=null).map(x=>x.key),0);
+  const recent=isBB(sp)?hist.filter(x=>x.day<=maxD&&x.day>maxD-DAYS[sp]):hist.filter(x=>x.hs!=null&&x.key>=maxD-200&&x.key<=maxD).filter(x=>x.key%100>=3||Math.floor(x.key/100)<Math.floor(maxD/100));
+  const P=TP[sp];
+  for(const x of recent){
+    let f=null;if(isBB(sp)){const gl=(lg[x.h]||[]).find(z=>z.d===x.day&&z.o===x.a);if(gl)f={hs:gl.pf,as:gl.pa};}else f={hs:x.hs,as:x.as};if(!f)continue;
+    const g={home:x.h,away:x.a,day:isBB(sp)?x.day:undefined,key:isBB(sp)?undefined:x.key,spread:x.sp,total:x.tot,ml_home:x.mlh,ml_away:x.mla};
+    const pr=projectGame(sp,g,{cutoff:isBB(sp)?x.day:x.key,noInj:true});if(!pr)continue;
+    const tb=teamBets(sp,g,pr,{noUser:true});
+    tb.bets.forEach(b=>{if(b.market==="Moneyline"||b.edge==null)return;let r;
+      if(b.market==="Total"){const T=f.hs+f.as;r=T===b.line?"push":((T>b.line)===(b.team==="Over")?"hit":"miss");}
+      else{const mine=b.team===g.home?f.hs-f.as:f.as-f.hs;const v=mine+b.line;r=v===0?"push":v>0?"hit":"miss";}
+      rows.push({m:b.market,g:b.grade,r,d:isBB(sp)?x.day:x.key});});
+  }
+  const sum=f=>{const a=rows.filter(f),w=a.filter(r=>r.r==="hit").length,l=a.filter(r=>r.r==="miss").length,pu=a.length-w-l;return {w,l,pu,u:w*(100/110)-l};};
+  const span=isBB(sp)?new Set(recent.map(x=>x.day)).size:new Set(recent.map(x=>x.key)).size;
+  return {n:rows.length,span,ats:sum(r=>r.m==="Spread"),atsAB:sum(r=>r.m==="Spread"&&(r.g==="A"||r.g==="B")),ou:sum(r=>r.m==="Total"),ouAB:sum(r=>r.m==="Total"&&(r.g==="A"||r.g==="B"))};
+}
+function teamRecordHTML(sp){
+  if(!LHIST)return `<div class="card" id="teamRecCard"><b>📊 Team picks record</b><div class="note">Loading line history…</div></div>`;
+  const R=teamRecord(sp);
+  const fmt=x=>`${x.w}–${x.l}${x.pu?"–"+x.pu:""}`,pc=x=>x.w+x.l?Math.round(x.w/(x.w+x.l)*100)+"%":"—",un=x=>`${x.u>=0?"+":""}${x.u.toFixed(1)}u`;
+  if(!R||!R.n)return `<div class="card" id="teamRecCard"><b>📊 Team picks record</b><div class="note">Building now — the site saves every ${sp} spread and total each day, then grades the bot's picks against the final scores. The record fills in as games finish.</div></div>`;
+  return `<div class="card" id="teamRecCard"><b>📊 Team picks record</b> <span class="mut" style="font-size:12px">${sp} · last ${R.span} ${sp==="NFL"?"weeks":"game days"} · real closing lines</span>
+    <table style="margin-top:6px"><tr><th></th><th class="r">Record</th><th class="r">Win %</th><th class="r">Units</th></tr>
+    <tr><td>Spreads (all leans)</td><td class="r">${fmt(R.ats)}</td><td class="r">${pc(R.ats)}</td><td class="r ${R.ats.u>=0?"more":"less"}">${un(R.ats)}</td></tr>
+    <tr><td><b>Spreads (A/B only)</b></td><td class="r"><b>${fmt(R.atsAB)}</b></td><td class="r">${pc(R.atsAB)}</td><td class="r ${R.atsAB.u>=0?"more":"less"}">${un(R.atsAB)}</td></tr>
+    <tr><td>Totals (all leans)</td><td class="r">${fmt(R.ou)}</td><td class="r">${pc(R.ou)}</td><td class="r ${R.ou.u>=0?"more":"less"}">${un(R.ou)}</td></tr>
+    <tr><td><b>Totals (A/B only)</b></td><td class="r"><b>${fmt(R.ouAB)}</b></td><td class="r">${pc(R.ouAB)}</td><td class="r ${R.ouAB.u>=0?"more":"less"}">${un(R.ouAB)}</td></tr></table>
+    ${(()=>{const x=R.atsAB,y=R.ouAB,ok=v=>v.w+v.l>=30&&v.w/(v.w+v.l)>=0.524;const bad=v=>v.w+v.l>=30&&v.w/(v.w+v.l)<0.5;
+      return ok(x)||ok(y)?`<div class="note" style="color:#1F7A4C"><b>✅ Beating the closing line${ok(x)&&ok(y)?"":ok(x)?" on spreads":" on totals"}.</b> Keep an eye on it as the sample grows.</div>`
+        :bad(x)&&bad(y)?`<div class="note warn"><b>⚠ Not beating ${sp} closing lines yet.</b> Sportsbook lines are sharp — treat these leans as info, not locks, and size small.</div>`
+        :`<div class="note"><b>Roughly break-even so far.</b> No proven edge yet — treat leans as info and size small.</div>`;})()}
+    <div class="note">Replayed with only the info available before each game (injuries not included). Units assume 1 unit at -110 — you need 52.4% to break even.</div></div>`;
+}
+function injuryHit(sp,ab){ // points a team loses from players ruled out (scaled by how much they've been playing lately)
+  const S=D[sp];if(!S)return {pts:0,who:[]};const t=S.teams.indexOf(ab);if(t<0)return {pts:0,who:[]};const c=S.c,outs=outSetFor(sp);let pts=0;const who=[];
+  if(sp==="NFL"){[...outs].forEach(q=>{if(S.lastTeam[q]!==t||S.pg[q]!=="QB")return;const r=S.by[q].filter(i=>c.s[i]===S.cur&&c.t[i]===t);if(r.length>=3&&mean(r.map(i=>c.patt[i]))>=20){const recent=r.filter(i=>c.d[i]>=S.maxD-2).length;if(recent){pts+=4;who.push(S.players[q][0]);}}});return {pts,who};}
+  const logs=teamLogs(S)[t].filter(g=>g.s===S.cur).slice(-10);
+  [...outs].forEach(q=>{if(S.lastTeam[q]!==t)return;const r=S.by[q].filter(i=>c.t[i]===t&&c.s[i]>=S.cur-1).slice(-15);if(r.length<3)return;
+    const mn=mean(r.map(i=>c.min[i]));if(mn<15)return;const ppg=mean(r.map(i=>c.pts[i]));
+    const played=logs.length?logs.filter(g=>S.by[q].some(i=>c.d[i]===g.d&&c.t[i]===t)).length/logs.length:1;
+    const hit=ppg*0.4*played;if(hit>=0.5){pts+=hit;who.push(S.players[q][0]);}});
+  return {pts:Math.min(pts,sp==="CBB"?7:9),who};
+}
+const decOdds=o=>{o=parseFloat(o);if(isNaN(o)||!o)return null;return o>0?1+o/100:1+100/(-o);};
+function tlKey(sp,g){return sp+"|"+(g.day??g.key)+"|"+g.away+"@"+g.home;}
+function teamBets(sp,g,pr,opt){
+  const P=TP[sp],u=opt&&opt.noUser?{}:((state.teamLines||{})[tlKey(sp,g)]||{});const out=[];
+  const num=v=>{const x=parseFloat(v);return isNaN(x)?null:x;};
+  const spread=num(u.spread)??g.spread,total=num(u.total)??g.total,mlh=num(u.mlh)??g.ml_home,mla=num(u.mla)??g.ml_away;
+  const so=num(u.so)??-110,to=num(u.to)??-110;
+  // blend the model with the market number where one exists (models alone are overconfident)
+  const mkM=g.spread!=null?-g.spread:(spread!=null?-spread:null),mkT=g.total??total;
+  const m=mkM!=null?0.5*pr.margin+0.5*mkM:pr.margin,t=mkT!=null?0.5*pr.total+0.5*mkT:pr.total;
+  const grade=e=>e>=0.05?"A":e>=0.03?"B":e>=0.015?"C":"—";
+  if(spread!=null){const ph=ncdf((m+spread)/P.sdM),side=ph>=0.5?"home":"away",p=Math.max(ph,1-ph),be=amer(so),edge=p-be;
+    const ab=side==="home"?g.home:g.away,ln=side==="home"?spread:-spread;
+    out.push({market:"Spread",label:`${ab} ${ln>0?"+":""}${ln}`,team:ab,line:ln,odds:so,p,edge,grade:grade(edge)});}
+  if(total!=null){const po=1-ncdf((total-t)/P.sdT),over=po>=0.5,p=Math.max(po,1-po),edge=p-amer(to);
+    out.push({market:"Total",label:`${over?"Over":"Under"} ${total}`,team:over?"Over":"Under",line:total,odds:to,p,edge,grade:grade(edge)});}
+  {const ph=ncdf(m/P.sdM);const opts=[];if(mlh!=null)opts.push({ab:g.home,p:ph,o:mlh});if(mla!=null)opts.push({ab:g.away,p:1-ph,o:mla});
+    const best=opts.map(x=>({...x,edge:x.p-amer(x.o)})).sort((a,b)=>b.edge-a.edge)[0];
+    if(best)out.push({market:"Moneyline",label:`${best.ab} ML ${best.o>0?"+":""}${best.o}`,team:best.ab,line:0,odds:best.o,p:best.p,edge:best.edge,grade:grade(best.edge)});
+    else out.push({market:"Moneyline",label:`${ph>=0.5?g.home:g.away} to win`,team:ph>=0.5?g.home:g.away,line:0,odds:null,p:Math.max(ph,1-ph),edge:null,grade:"—",noOdds:true});}
+  return {bets:out,spread,total,mlh,mla,so,to};
+}
+function teamPickObj(sp,g,b){return {kind:"team",sport:sp,market:b.market,player:b.label,stat:b.market,line:b.line,side:b.team,team:b.team,odds:b.odds,conf:b.p,grade:b.grade==="—"?"C":b.grade,home:g.home,away:g.away,gameKey:g.day??g.key,date:g.date,result:null};}
+function gradeTeamPick(p){
+  const S=D[p.sport];if(!S)return null;let f=null;
+  if(isBB(p.sport))f=teamFinal(S,p.home,p.away,p.gameKey);
+  else{const lv=LIVE.NFL&&LIVE.NFL[p.home+"|"+p.away];if(lv&&lv.state==="post")f={hs:+lv.hs,as:+lv.as};const st=(state.finals||{})["NFL|"+p.gameKey+"|"+p.away+"@"+p.home];if(!f&&st)f=st;if(f){state.finals=state.finals||{};state.finals["NFL|"+p.gameKey+"|"+p.away+"@"+p.home]=f;}}
+  if(!f){if(isBB(p.sport)&&S.maxD>p.gameKey+1)return {result:"push",actual:"no result"};return null;}
+  const act=`${p.away} ${f.as}–${f.hs} ${p.home}`;let r;
+  if(p.market==="Total"){const T=f.hs+f.as;r=T===p.line?"push":((T>p.line)===(p.team==="Over")?"hit":"miss");}
+  else{const mine=p.team===p.home?f.hs-f.as:f.as-f.hs;const v=mine+(p.market==="Spread"?p.line:0);r=v===0?(p.market==="Spread"?"push":"push"):v>0?"hit":"miss";}
+  return {result:r,actual:act};
+}
+function renderTeamPicks(el,sp,games){
+  if(!D[sp]){return `<div class="card empty">Loading…</div>`;}
+  const fmtO=o=>o==null?"—":(o>0?"+":"")+o;
+  const cards=games.map((g,gi)=>{const pr=projectGame(sp,g);if(!pr)return `<div class="card"><b>${esc(g.away)} @ ${esc(g.home)}</b><div class="note">Not enough data on one of these teams yet.</div></div>`;
+    const tb=teamBets(sp,g,pr),k=tlKey(sp,g);
+    const row=b=>`<div class="pick" style="padding:8px 0"><div class="info"><div class="mut" style="font-size:11px">${b.market}</div><div style="font-size:15px"><b>${esc(b.label)}</b>${b.odds!=null&&b.market!=="Moneyline"?` <span class="mut" style="font-size:12px">(${fmtO(b.odds)})</span>`:""}</div>
+      <div class="mut" style="font-size:11px">${pct(b.p)} to hit${b.edge!=null?` · edge ${b.edge>=0?"+":""}${(b.edge*100).toFixed(1)}%`:" · add odds to see value"}</div></div>
+      <span class="grade ${b.grade==="A"?"gA":b.grade==="B"?"gB":b.grade==="C"?"gC":"gP"}">${b.grade==="—"?"No edge":b.grade}</span>
+      ${b.edge!=null&&b.grade!=="—"?`<button class="btn sm ghost" style="width:auto;padding:6px 10px" data-tadd="${gi}|${b.market}">${teamSlip.some(x=>x.player===b.label&&x.home===g.home)?"✓":"＋"}</button>`:""}</div>`;
+    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><b>${esc(g.away)} @ ${esc(g.home)}</b><span class="mut" style="font-size:12px">${esc(g.date)}${g.time?" · "+esc(g.time)+" ET":""}</span></div>
+      <div style="margin-top:6px;font-size:14px">Model score: <b>${esc(g.away)} ${pr.as.toFixed(0)} – ${pr.hs.toFixed(0)} ${esc(g.home)}</b> <span class="mut" style="font-size:12px">· ${esc(pr.margin>=0?g.home:g.away)} by ${Math.abs(pr.margin).toFixed(1)} · total ${pr.total.toFixed(1)}</span></div>
+      ${pr.notes.length?`<div class="note">🚑 ${pr.notes.map(esc).join(" · ")}</div>`:""}
+      ${tb.bets.map(row).join("")}
+      <details style="margin-top:6px" ${tlOpen===k?"open":""}><summary class="mut" style="font-size:12px;cursor:pointer">✏️ Enter your book's lines (DraftKings, FanDuel, Underdog…)</summary>
+        <div class="row" style="margin-top:6px"><div><label>${esc(g.home)} spread</label><input data-tl="${k}|spread" inputmode="decimal" placeholder="${g.spread??"-3.5"}" value="${esc(((state.teamLines||{})[k]||{}).spread??"")}"></div><div><label>Odds</label><input data-tl="${k}|so" inputmode="numeric" placeholder="-110" value="${esc(((state.teamLines||{})[k]||{}).so??"")}"></div></div>
+        <div class="row"><div><label>Total</label><input data-tl="${k}|total" inputmode="decimal" placeholder="${g.total??"220.5"}" value="${esc(((state.teamLines||{})[k]||{}).total??"")}"></div><div><label>Odds</label><input data-tl="${k}|to" inputmode="numeric" placeholder="-110" value="${esc(((state.teamLines||{})[k]||{}).to??"")}"></div></div>
+        <div class="row"><div><label>${esc(g.away)} ML</label><input data-tl="${k}|mla" inputmode="numeric" placeholder="${g.ml_away??"+150"}" value="${esc(((state.teamLines||{})[k]||{}).mla??"")}"></div><div><label>${esc(g.home)} ML</label><input data-tl="${k}|mlh" inputmode="numeric" placeholder="${g.ml_home??"-170"}" value="${esc(((state.teamLines||{})[k]||{}).mlh??"")}"></div></div>
+        <div class="note">Spread is for the home team (negative = favored). Leave blank to use the posted line.</div></details></div>`;});
+  // best bets
+  const all=[];games.forEach((g,gi)=>{const pr=projectGame(sp,g);if(!pr)return;teamBets(sp,g,pr).bets.forEach(b=>{if(b.edge!=null&&b.grade!=="—")all.push({g,gi,b});});});
+  all.sort((a,b)=>b.b.edge-a.b.edge);
+  const best=all.slice(0,5);
+  const slipDec=teamSlip.reduce((x,p)=>x*(decOdds(p.odds)||1),1),slipP=teamSlip.reduce((x,p)=>x*p.conf,1);
+  return `<div class="card" style="background:linear-gradient(135deg,#7B1E2B,#4A1018);color:#F6EDE4;border:0"><div style="font-size:18px;font-weight:800">🎯 Team picks</div><div style="font-size:13px;opacity:.9;margin-top:4px">Spreads, totals and moneylines for DraftKings, FanDuel, Underdog and other books. The bot projects each score from team offense, defense, home court, rest and injuries, then compares it to the line.</div></div>
+    ${best.length?`<div class="card"><b>🏆 Best bets</b>${best.map(x=>`<div class="pick" style="padding:7px 0"><div class="info"><b>${esc(x.b.label)}</b> <span class="mut" style="font-size:12px">${x.b.market} · ${esc(x.g.away)} @ ${esc(x.g.home)}</span><div class="mut" style="font-size:11px">${pct(x.b.p)} · edge +${(x.b.edge*100).toFixed(1)}%</div></div><span class="grade g${x.b.grade}">${x.b.grade}</span><button class="btn sm ghost" style="width:auto;padding:6px 10px" data-tadd="${x.gi}|${x.b.market}">${teamSlip.some(p=>p.player===x.b.label&&p.home===x.g.home)?"✓":"＋"}</button></div>`).join("")}</div>`
+      :`<div class="card"><b>🏆 Best bets</b><div class="note">No clear edges yet${games.some(g=>g.spread!=null||g.total!=null)?"":" — lines usually post the morning of the game. You can also type your book's lines into any game below"}.</div></div>`}
+    ${teamSlip.length?`<div class="card" style="border:2px solid var(--acc)"><b>🧾 Your bet slip</b> <span class="mut" style="font-size:12px">${teamSlip.length===1?"Straight bet":teamSlip.length+"-leg parlay"}</span>
+      ${teamSlip.map((p,k)=>`<div class="pick" style="padding:6px 0"><div class="info"><b>${esc(p.player)}</b> <span class="mut" style="font-size:12px">${p.market} · ${esc(p.away)} @ ${esc(p.home)} · ${p.odds>0?"+":""}${p.odds}</span></div><button class="x" data-trm="${k}">✕</button></div>`).join("")}
+      <div class="stats"><div class="stat"><b>${pct(slipP)}</b><span>Chance all hit</span></div><div class="stat"><b>${(slipDec>=2?"+"+Math.round((slipDec-1)*100):"-"+Math.round(100/(slipDec-1)))}</b><span>Odds</span></div><div class="stat"><b class="${slipP*slipDec-1>=0?"more":"less"}">${slipP*slipDec-1>=0?"+":""}${((slipP*slipDec-1)*100).toFixed(0)}%</b><span>Expected value</span></div></div>
+      <div class="row" style="margin-top:8px;align-items:center"><span class="mut" style="font-size:13px;flex:0 0 auto">Bet $</span><input id="tAmt" type="number" inputmode="decimal" value="${state.lastStake||10}" style="width:80px;flex:0 0 auto;margin:0"><button class="btn sm" style="flex:1" id="tLog">Log to Tracker</button></div>
+      <div class="row" style="margin-top:6px"><button class="btn sm ghost" style="flex:1" id="tShare">📤 Share</button>${state.owner?`<button class="btn sm ghost" style="flex:1" id="tHaus">📣 Haus</button>`:""}<button class="btn sm ghost" style="flex:1" id="tClear">Clear</button></div>
+      ${teamSlip.length>1?`<div class="note">Parlay odds here multiply the legs — your book's price may differ slightly.</div>`:""}</div>`:""}
+    <div class="ggrid">${cards.join("")}</div>
+    ${teamRecordHTML(sp)}
+    <div class="note">The bot's numbers are blended 50/50 with the market line, so edges are honest-sized. "Edge" = the bot's chance minus what the odds need to break even (52.4% at -110). Research only — not betting advice.</div>`;
+}
+function wireTeamPicks(el,sp,games){
+  el.querySelectorAll("[data-tl]").forEach(i=>i.onchange=()=>{const [a,b,c2,f]=i.dataset.tl.split("|");const k=a+"|"+b+"|"+c2;tlOpen=k;state.teamLines=state.teamLines||{};const o=state.teamLines[k]||(state.teamLines[k]={});if(i.value.trim()==="")delete o[f];else o[f]=i.value.trim();save();renderGames();});
+  el.querySelectorAll("[data-tadd]").forEach(b=>b.onclick=e=>{e.stopPropagation();const [gi,mk]=b.dataset.tadd.split("|");const g=games[+gi],pr=projectGame(sp,g);const bt=teamBets(sp,g,pr).bets.find(x=>x.market===mk);if(!bt)return;
+    const p=teamPickObj(sp,g,bt);const ix=teamSlip.findIndex(x=>x.player===p.player&&x.home===p.home);
+    if(ix>=0)teamSlip.splice(ix,1);else{if(teamSlip.some(x=>x.home===g.home&&x.market===mk)){toast("Already have that market for this game");return;}teamSlip.push(p);}renderGames();});
+  el.querySelectorAll("[data-trm]").forEach(b=>b.onclick=()=>{teamSlip.splice(+b.dataset.trm,1);renderGames();});
+  const lg=$("tLog");if(lg)lg.onclick=()=>{const amt=parseFloat($("tAmt").value);if(!(amt>0)){toast("Enter your bet amount");return;}if(limitHit()){toast("Daily loss limit reached");return;}
+    const dec=teamSlip.reduce((x,p)=>x*(decOdds(p.odds)||1),1);state.lastStake=amt;
+    state.entries.push({id:uid(),date:Date.now(),type:"bet",stake:amt,mult:+dec.toFixed(3),returned:null,picks:teamSlip.map(p=>({...p}))});save();renderTracker();teamSlip=[];renderGames();toast("Bet logged — find it in Tracker");};
+  const sh=$("tShare");if(sh)sh.onclick=()=>shareSlip({title:"Team picks",sub:fmtDay(etToday()),picks:teamSlip,type:"bet",mult:+teamSlip.reduce((x,p)=>x*(decOdds(p.odds)||1),1).toFixed(2),all:teamSlip.reduce((x,p)=>x*p.conf,1)});
+  const hh=$("tHaus");if(hh)hh.onclick=()=>addToHaus(teamSlip,{type:"bet",mult:+teamSlip.reduce((x,p)=>x*(decOdds(p.odds)||1),1).toFixed(2),all:teamSlip.reduce((x,p)=>x*p.conf,1)});
+  const cl=$("tClear");if(cl)cl.onclick=()=>{teamSlip=[];renderGames();};
+}
+/* =================== TODAY IN 30 SECONDS =================== */
+function todayCardHTML(){
+  const td=etToday();const sports=SPORTS.filter(sp=>D[sp]&&SL&&SL[sp]&&(SL[sp].games||[]).some(g=>g.date===td));
+  if(!sports.length)return "";
+  const items=[];
+  // games
+  const gm=sports.map(sp=>{const gs=SL[sp].games.filter(g=>g.date===td).sort((a,b)=>tmin(a.time)-tmin(b.time));return `${gs.length} ${sp}${gs[0]&&gs[0].time?` (first ${gs[0].time})`:""}`;}).join(" · ");
+  items.push(`<div class="tq"><span>🗓️</span><div><b>On the slate</b><div class="mut">${esc(gm)}</div></div></div>`);
+  // best fav
+  try{const fav=sports.flatMap(sp=>favsFor(sp)).sort((a,b)=>b.score-a.score)[0];
+    if(fav)items.push(`<div class="tq" data-tq="favs"><span>🤖</span><div><b>Top Fav:</b> ${esc(fav.player)} <b class="${fav.side==="More"?"more":"less"}">${fav.side==="More"?"Over":"Under"} ${fav.line}</b> ${esc(fav.stat)}<div class="mut">${pct(fav.conf)} · hit ${fav.hits??"—"} of last ${fav.n??10} · ${esc(fav.sport)}</div></div></div>`);}catch(e){}
+  // best team bet
+  try{let best=null;sports.forEach(sp=>SL[sp].games.filter(g=>g.date===td).forEach(g=>{const pr=projectGame(sp,g);if(!pr)return;teamBets(sp,g,pr).bets.forEach(b=>{if(b.edge!=null&&(b.grade==="A"||b.grade==="B")&&(!best||b.edge>best.b.edge))best={sp,g,b};});}));
+    if(best)items.push(`<div class="tq" data-tq="team" data-tqs="${best.sp}"><span>🎯</span><div><b>Top team bet:</b> ${esc(best.b.label)} <span class="mut">(${esc(best.b.market)})</span><div class="mut">${esc(best.g.away)} @ ${esc(best.g.home)} · ${pct(best.b.p)} · edge +${(best.b.edge*100).toFixed(1)}%</div></div></div>`);}catch(e){}
+  // biggest injury boost
+  try{let top=null;sports.filter(isBB).forEach(sp=>{const S=D[sp],c=S.c,outs=outSetFor(sp),teams=new Set(SL[sp].games.filter(g=>g.date===td).flatMap(g=>[g.home,g.away]));const st=findStat(sp,"Points");
+      [...outs].forEach(q=>{const t=S.teams[S.lastTeam[q]];if(!teams.has(t))return;const r=S.by[q].filter(i=>c.t[i]===S.lastTeam[q]&&c.s[i]>=S.cur-1).slice(-15);if(r.length<4||mean(r.map(i=>c.min[i]))<22)return;
+        boardFor(sp).filter(x=>x.team===t).forEach(x=>{const o=onOffRows(S,x.pi,q);if(!o||o.wo.length<5||o.wi.length<5)return;const d=mean(o.wo.map(j=>st[2](c,j)))-mean(o.wi.map(j=>st[2](c,j)));
+          if(!top||d>top.d)top={sp,d,who:x.player,out:S.players[q][0],n:o.wo.length,a:mean(o.wo.map(j=>st[2](c,j)))};});});});
+    if(top&&top.d>=2)items.push(`<div class="tq" data-tq="look" data-tqp="${esc(top.who)}"><span>🚑</span><div><b>Injury boost:</b> ${esc(top.who)} averages <b class="more">${top.a.toFixed(1)} pts</b> without ${esc(top.out)} (+${top.d.toFixed(1)})<div class="mut">${top.n} games without · ${esc(top.out)} is out</div></div></div>`);}catch(e){}
+  return `<div class="card" id="todayCard"><div style="display:flex;justify-content:space-between;align-items:center"><b>⚡ Today in 30 seconds</b><span class="mut" style="font-size:12px">${esc(fmtDay(td))}</span></div>${items.join("")}</div>`;
+}
 /* =================== RENDER: SLATE =================== */
 let selected=new Set(),bType="power",openId=null;
 const sgn=x=>(x>=0?"+":"")+x.toFixed(0)+"%";
@@ -2125,7 +2346,7 @@ function toggleWatch(){
 
 /* =================== ACCURACY =================== */
 function renderAccuracy(){
-  const picks=state.entries.flatMap(e=>e.picks).filter(p=>(p.result==="hit"||p.result==="miss")&&p.conf);
+  const picks=state.entries.flatMap(e=>e.picks).filter(p=>p.kind!=="team"&&(p.result==="hit"||p.result==="miss")&&p.conf);
   const b=[[0.5,0.55],[0.55,0.6],[0.6,0.65],[0.65,1.01]].map(([lo,hi])=>{const x=picks.filter(p=>p.conf>=lo&&p.conf<hi);return {lo,hi,n:x.length,pred:x.length?mean(x.map(p=>p.conf)):null,act:x.length?x.filter(p=>p.result==="hit").length/x.length:null};});
   $("accCard").innerHTML=`<b>📏 Accuracy</b><div class="note">Is the bot's confidence honest for you? Each row: what it predicted vs how often those picks hit.</div>
     <table style="margin-top:6px"><tr><th>Confidence</th><th class="r">Picks</th><th class="r">Predicted</th><th class="r">Actual</th></tr>${b.map(x=>`<tr><td>${(x.lo*100).toFixed(0)}–${x.hi>1?"85":(x.hi*100).toFixed(0)}%</td><td class="r">${x.n}</td><td class="r">${x.pred!=null?pct(x.pred):"—"}</td><td class="r ${x.act!=null&&x.pred!=null?(x.act>=x.pred-0.03?"more":"less"):""}">${x.act!=null?pct(x.act):"—"}</td></tr>`).join("")}</table>
@@ -2137,6 +2358,7 @@ function entryReturn(e){
   if(e.returned!=null&&e.returned!=="")return parseFloat(e.returned);
   const r=e.picks.map(p=>p.result);if(r.some(x=>!x))return null;
   const live=r.filter(x=>x!=="push").length,hits=r.filter(x=>x==="hit").length;
+  if(e.type==="bet"){if(r.includes("miss"))return 0;const live2=e.picks.filter(p=>p.result!=="push");if(!live2.length)return e.stake;return e.stake*live2.reduce((x,p)=>x*(decOdds(p.odds)||1),1);}
   if(e.type==="power"){
     if(r.includes("miss"))return 0;if(live<2)return e.stake;
     const m=live===e.picks.length?e.mult:state.payouts[live];return m?e.stake*m:null;
@@ -2146,7 +2368,7 @@ function entryReturn(e){
 function autoGrade(){
   let n=0;
   state.entries.forEach(e=>e.picks.forEach(p=>{
-    if(p.result)return;const S=D[p.sport];if(!S)return;
+    if(p.result)return;if(p.kind==="team"){const g=gradeTeamPick(p);if(g){p.result=g.result;p.actual=g.actual;n++;}return;}const S=D[p.sport];if(!S)return;
     const m=findPlayer(p.player,p.sport);if(!m.length)return;const st=findStat(p.sport,p.stat);if(!st)return;
     const rows=S.by[m[0].i];let i;
     if(p.gameKey!=null){i=rows.find(j=>S.c.d[j]===p.gameKey);
@@ -2183,9 +2405,9 @@ function renderTracker(){
   const list=[...state.entries].sort((a,b)=>b.date-a.date);
   $("entryList").innerHTML=list.length?list.map(e=>{const r=entryReturn(e);
     const status=r==null?'<span class="mut">Pending</span>':`<span class="${r>e.stake?"more":r<e.stake?"less":""}">${fmt$(r-e.stake)}</span>`;
-    return `<div class="card entry"><h3><span>${new Date(e.date).toLocaleDateString(undefined,{month:"short",day:"numeric"})} · ${e.type==="pred"?"💾 Saved prediction":e.picks.length+"-pick "+(e.type==="power"?"Power":"Flex")}</span>${e.type==="pred"?(e.picks[0].result?`<span class="${e.picks[0].result==="hit"?"more":e.picks[0].result==="miss"?"less":""}">${e.picks[0].result}</span>`:'<span class="mut">Pending</span>'):status}</h3>
-    <div class="mut" style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">Entry $<input type="number" inputmode="decimal" min="0" step="0.5" data-stake="${e.id}" value="${e.stake}" style="width:76px;padding:4px 8px;font-size:13px;margin:0" aria-label="Entry amount"> ✏️ · top payout ${e.mult?e.mult+"x":"—"}</div>
-    ${e.picks.map((p,i)=>`<div class="pick"><div class="info"><div class="nm" style="font-size:14px">${esc(p.player)}</div><div class="mut" style="font-size:12px"><span class="${p.side==="More"?"more":"less"}">${p.side}</span> ${p.line} ${esc(p.stat)}${p.actual!=null?" · got "+esc(p.actual):""}</div></div>
+    return `<div class="card entry"><h3><span>${new Date(e.date).toLocaleDateString(undefined,{month:"short",day:"numeric"})} · ${e.type==="pred"?"💾 Saved prediction":e.type==="bet"?(e.picks.length===1?"🎯 Straight bet":"🎯 "+e.picks.length+"-leg parlay"):e.picks.length+"-pick "+(e.type==="power"?"Power":"Flex")}</span>${e.type==="pred"?(e.picks[0].result?`<span class="${e.picks[0].result==="hit"?"more":e.picks[0].result==="miss"?"less":""}">${e.picks[0].result}</span>`:'<span class="mut">Pending</span>'):status}</h3>
+    <div class="mut" style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">Entry $<input type="number" inputmode="decimal" min="0" step="0.5" data-stake="${e.id}" value="${e.stake}" style="width:76px;padding:4px 8px;font-size:13px;margin:0" aria-label="Entry amount"> ✏️ · ${e.type==="bet"?"pays "+(e.mult?(e.mult).toFixed(2)+"x":"—"):"top payout "+(e.mult?e.mult+"x":"—")}</div>
+    ${e.picks.map((p,i)=>`<div class="pick"><div class="info"><div class="nm" style="font-size:14px">${esc(p.player)}</div><div class="mut" style="font-size:12px">${p.kind==="team"?`${esc(p.market)} · ${esc(p.away)} @ ${esc(p.home)}${p.odds!=null?" · "+(p.odds>0?"+":"")+p.odds:""}${p.actual!=null?" · final "+esc(p.actual):""}`:`<span class="${p.side==="More"?"more":"less"}">${p.side}</span> ${p.line} ${esc(p.stat)}${p.actual!=null?" · got "+esc(p.actual):""}`}</div></div>
     <div class="hm">${["hit","miss","push"].map(x=>`<button class="${p.result===x?x:""}" data-e="${e.id}" data-i="${i}" data-r="${x}">${x==="hit"?"✓":x==="miss"?"✗":"P"}</button>`).join("")}</div></div>`).join("")}
     <div class="row" style="margin-top:10px;align-items:end"><div><label style="margin-top:0">Amount returned (auto)</label><input type="number" inputmode="decimal" data-ret="${e.id}" value="${e.returned??""}" placeholder="${r!=null?r.toFixed(2):"$"}"></div>
     <button class="btn sm ghost" style="flex:0 0 auto" data-eshare="${e.id}">📤</button>${state.owner&&e.type!=="pred"?`<button class="btn sm ghost" style="flex:0 0 auto" data-ehaus="${e.id}">📣</button>`:""}<button class="btn sm ghost" style="flex:0 0 auto" data-del="${e.id}">Delete</button></div></div>`;}).join(""):`<div class="card empty">No entries yet. Build one on the Picks tab.</div>`;
@@ -2244,6 +2466,7 @@ renderTracker();renderSettings();
 $("ageGate").classList.remove("hide");
 $("ageOk").onclick=()=>$("ageGate").classList.add("hide");
 initCloud();
+if(/[?&]debug/.test(location.search))window.__ph={TP,TEAMR,get D(){return D;},teamRecord,loadHist,projectGame,teamRatings,abLogs,get LHIST(){return LHIST;},analyzeProp,findStat,mean,quant,FAV_MIN,FAV_STATS,ncdf};
 fetch("slate.json").then(r=>r.ok?r.json():null).then(j=>{SL=j;}).catch(()=>{}).finally(()=>fetch("data.json").then(r=>{if(!r.ok)throw new Error(r.status);$("loadMsg").textContent="Crunching numbers…";return r.json();}).then(raw=>{
   D.built=raw.built;D.NBA=prepSport("NBA",raw.NBA);D.NFL=prepSport("NFL",raw.NFL);
   $("dataSub").textContent=`Stats through ${fmtFull(D.NBA)} (NBA) · ${D.NFL.through.replace(" season,","")} (NFL)`;
